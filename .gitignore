@@ -1,0 +1,38 @@
+# Local data/cache/output
+data/
+*.csv
+*.parquet
+*.db
+*.sqlite
+*.pkl
+
+# Logs
+logs/
+*.log
+
+# Secrets
+.env
+*.key
+*.pem
+config/private/
+
+# Python virtual env
+.venv/
+venv/
+env/
+
+__pycache__/
+*.pyc
+data/
+*.csv
+*.parquet
+*.db
+*.sqlite
+*.pkl
+logs/
+*.log
+.env
+.venv/
+venv/
+env/
+*.md
