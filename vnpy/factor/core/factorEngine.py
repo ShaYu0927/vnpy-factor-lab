@@ -8,6 +8,10 @@ from concurrent.futures import Executor, Future, ProcessPoolExecutor, ThreadPool
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+from vnpy.common.logger import get_logger
+
+
+logger = get_logger("factor.engine")
 
 class ExecutionMode(str, Enum):
     """
@@ -65,13 +69,11 @@ class FactorError:
     error: str
     traceback_text: str
     
-    
 @dataclass(slots=True)
 class FactorBatchResult:
     """
     Batch result returned by FactorEngine.
     """
-
     values: List[FactorValue] = field(default_factory=list)
     errors: List[FactorError] = field(default_factory=list)
     elapsed_ms: float = 0.0
@@ -179,6 +181,10 @@ class FactorEngine:
         )
 
         self._check_factor_names()
+        self._executor: Optional[Executor] = None
+        if self._config.mode == ExecutionMode.THREAD:
+            self._executor = ThreadPoolExecutor(max_workers=self._config.resolved_workers(), thread_name_prefix="factor-worker",)
+        
 
     @property
     def factors(self) -> Tuple[Factor, ...]:
@@ -192,7 +198,6 @@ class FactorEngine:
         """
         Calculate all factors for one symbol.
         """
-
         return self.calculate_many({symbol: data}, context=context)
     
     def calculate_many(self, symbol_data_map: Mapping[str, Any], context: Optional[FactorContext] = None, ) -> FactorBatchResult:
@@ -212,6 +217,7 @@ class FactorEngine:
         start = time.perf_counter()
         ctx = context or FactorContext()
         tasks = self._build_tasks(symbol_data_map, ctx)
+    
 
         if self._config.mode == ExecutionMode.SYNC:
             result = self._run_sync(tasks)
@@ -221,11 +227,9 @@ class FactorEngine:
         result.elapsed_ms = (time.perf_counter() - start) * 1000.0
         return result
     
-    
     def calculate_factor_cross_section(self, factor_name: str, symbol_data_map: Mapping[str, Any], context: Optional[FactorContext] = None,) -> FactorBatchResult:
         """
         Calculate one specific factor across many symbols.
-
         Useful for cross-sectional factor ranking.
         """
 
@@ -255,12 +259,7 @@ class FactorEngine:
                 return factor
         raise KeyError(f"factor not found: {factor_name}")
     
-
-    def _build_tasks(
-        self,
-        symbol_data_map: Mapping[str, Any],
-        context: FactorContext,
-    ) -> List[FactorTask]:
+    def _build_tasks(self, symbol_data_map: Mapping[str, Any], context: FactorContext,) -> List[FactorTask]:
         tasks: List[FactorTask] = []
 
         for symbol, data in symbol_data_map.items():
@@ -279,8 +278,6 @@ class FactorEngine:
 
         return tasks
     
-    
-    
     def _run_sync(self, tasks: Sequence[FactorTask]) -> FactorBatchResult:
         values: List[FactorValue] = []
         errors: List[FactorError] = []
@@ -296,8 +293,6 @@ class FactorEngine:
 
         return FactorBatchResult(values=values, errors=errors)
 
-    
-            
     def _run_parallel(self, tasks: Sequence[FactorTask]) -> FactorBatchResult:
         values: List[FactorValue] = []
         errors: List[FactorError] = []
@@ -305,30 +300,26 @@ class FactorEngine:
         if not tasks:
             return FactorBatchResult()
 
-        executor_cls = self._select_executor()
-        max_workers = self._config.resolved_workers()
+        if self._executor is None:
+            executor_cls = self._select_executor()
+            self._executor = executor_cls(max_workers=self._config.resolved_workers())
 
-        with executor_cls(max_workers=max_workers) as executor:
-            futures = self._submit_tasks(executor, tasks)
+        futures = self._submit_tasks(self._executor, tasks)
 
-            for future in as_completed(futures):
-                value, error = future.result()
+        for future in as_completed(futures):
+            value, error = future.result()
 
-                if error is not None:
-                    errors.append(error)
-                    if self._config.fail_fast:
-                        self._cancel_remaining(futures)
-                        break
-                elif value is not None:
-                    values.append(value)
+            if error is not None:
+                errors.append(error)
+                if self._config.fail_fast:
+                    self._cancel_remaining(futures)
+                    break
+            elif value is not None:
+                values.append(value)
 
         return FactorBatchResult(values=values, errors=errors)
 
-    def _submit_tasks(
-        self,
-        executor: Executor,
-        tasks: Sequence[FactorTask],
-    ) -> List[Future]:
+    def _submit_tasks(self, executor: Executor, tasks: Sequence[FactorTask],) -> List[Future]:
         return [executor.submit(_execute_factor_task, task) for task in tasks]
 
     def _cancel_remaining(self, futures: Iterable[Future]) -> None:
@@ -345,7 +336,6 @@ class FactorEngine:
 
         raise ValueError(f"unsupported execution mode: {self._config.mode}")
     
-    
 
 def _execute_factor_task(task: FactorTask) -> Tuple[Optional[FactorValue], Optional[FactorError]]:
         """
@@ -356,6 +346,8 @@ def _execute_factor_task(task: FactorTask) -> Tuple[Optional[FactorValue], Optio
 
         factor = task.factor
         symbol = task.symbol
+        
+        logger.info("start factor symbol=%s factor=%s", task.symbol, task.factor.name,)
 
         try:
             raw_value = factor.calculate(symbol=symbol, data=task.data, context=task.context)
@@ -368,7 +360,7 @@ def _execute_factor_task(task: FactorTask) -> Tuple[Optional[FactorValue], Optio
                 ),
                 None,
             )
-        except Exception as exc:  # pylint: disable=broad-except
+        except Exception as exc: 
             return (
                 None,
                 FactorError(

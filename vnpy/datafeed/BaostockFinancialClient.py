@@ -67,7 +67,7 @@ class BaostockFinancialClient:
     @staticmethod
     def _query_to_dataframe(rs) -> pd.DataFrame:
         """
-        将 BaoStock 查询结果转换成 DataFrame。
+        将 BaoStock 查询结果转换成 DataFrame
         """
         rows = []
 

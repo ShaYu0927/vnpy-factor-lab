@@ -6,6 +6,8 @@ from vnpy.factor.core.factorDataBuilder import (
     BasicMomentumEngineFactor,
     BasicVolatilityEngineFactor,
     BasicVolumeEngineFactor,
+    IntradayFadeReversalFactor,
+    VolumePriceReversalFactor,
 )
 from vnpy.factor.core.factorEngine import (
     ExecutionMode,
@@ -28,6 +30,8 @@ class BasicFactorSet:
             BasicMomentumEngineFactor(window=20),
             BasicVolatilityEngineFactor(window=20),
             BasicVolumeEngineFactor(window=20),
+            VolumePriceReversalFactor(window=20),
+            IntradayFadeReversalFactor(volume_window=20),
         )
 
 
@@ -39,19 +43,10 @@ class FactorBatchCalculator:
     def __init__(self, factor_engine: FactorEngine) -> None:
         self.factor_engine = factor_engine
 
-    def calculate_many(
-        self,
-        symbol_data_map: Mapping[str, object],
-        context: Optional[FactorContext] = None,
-    ) -> FactorBatchResult:
+    def calculate_many(self, symbol_data_map: Mapping[str, object], context: Optional[FactorContext] = None,) -> FactorBatchResult:
         return self.factor_engine.calculate_many(symbol_data_map, context=context)
 
-    def calculate_cross_section(
-        self,
-        factor_name: str,
-        symbol_data_map: Mapping[str, object],
-        context: Optional[FactorContext] = None,
-    ) -> FactorBatchResult:
+    def calculate_cross_section(self, factor_name: str, symbol_data_map: Mapping[str, object], context: Optional[FactorContext] = None,) -> FactorBatchResult:
         return self.factor_engine.calculate_factor_cross_section(
             factor_name=factor_name,
             symbol_data_map=symbol_data_map,
@@ -121,7 +116,7 @@ class FactorSampleAssembler:
                 result.momentum = value.value
             elif value.factor_name.startswith("volatility_"):
                 result.volatility = value.value
-            elif value.factor_name.startswith("volume_"):
+            elif value.factor_name.startswith("volume_") and not value.factor_name.startswith("volume_price_"):
                 result.volume = value.value
 
         return result

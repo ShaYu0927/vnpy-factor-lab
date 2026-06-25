@@ -74,7 +74,6 @@ class DateSizeRotatingFileHandler(RotatingFileHandler):
 
         super().doRollover()
 
-
 _APP_LOGGER_NAME = "quant"
 _LOGGER_INITIALIZED = False
 _LOGGER_LOCK = threading.RLock()
@@ -141,11 +140,7 @@ def init_global_logger(app_name: str = "quant", log_dir: str = "logs", level: in
             file_handler.setFormatter(formatter)
             handlers.append(file_handler)
 
-        _QUEUE_LISTENER = QueueListener(
-            log_queue,
-            *handlers,
-            respect_handler_level=True,
-        )
+        _QUEUE_LISTENER = QueueListener(log_queue, *handlers, respect_handler_level=True,)
         _QUEUE_LISTENER.start()
 
         _LOGGER_INITIALIZED = True
@@ -153,7 +148,6 @@ def init_global_logger(app_name: str = "quant", log_dir: str = "logs", level: in
         atexit.register(shutdown_global_logger)
 
         return logger
-
 
 def get_logger(name: Optional[str] = None) -> logging.Logger:
     """
@@ -175,7 +169,6 @@ def get_logger(name: Optional[str] = None) -> logging.Logger:
 
     return logging.getLogger(f"{_APP_LOGGER_NAME}.{name}")
 
-
 def shutdown_global_logger() -> None:
     """
     Stop queue listener and flush remaining logs.
@@ -191,22 +184,17 @@ def shutdown_global_logger() -> None:
 
         _LOGGER_INITIALIZED = False
 
-
 def debug(message: str, *args, **kwargs) -> None:
     get_logger().debug(message, *args, **kwargs)
-
 
 def info(message: str, *args, **kwargs) -> None:
     get_logger().info(message, *args, **kwargs)
 
-
 def warning(message: str, *args, **kwargs) -> None:
     get_logger().warning(message, *args, **kwargs)
 
-
 def error(message: str, *args, **kwargs) -> None:
     get_logger().error(message, *args, **kwargs)
-
 
 def exception(message: str, *args, **kwargs) -> None:
     get_logger().exception(message, *args, **kwargs)

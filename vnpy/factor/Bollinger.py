@@ -8,7 +8,6 @@ class BollingerResult:
     """
     Bollinger Bands factor result for a single stock.
     """
-
     symbol: str
     window: int
     # Latest close price.

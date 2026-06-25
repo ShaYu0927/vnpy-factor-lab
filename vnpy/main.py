@@ -27,6 +27,10 @@ from vnpy.subscription.pool import create_default_pool
 # =============================================================================
 
 DEFAULT_FREQUENCY = "60s"
+DEFAULT_SUBSCRIPTION_QUERY_DATE = os.getenv("VNPY_SUBSCRIPTION_QUERY_DATE")
+DEFAULT_SUBSCRIPTION_FALLBACK_DAYS = int(os.getenv("VNPY_SUBSCRIPTION_FALLBACK_DAYS", "7"))
+DEFAULT_FACTOR_MODE = os.getenv("VNPY_FACTOR_MODE", "thread")
+DEFAULT_FACTOR_MAX_WORKERS = int(os.getenv("VNPY_FACTOR_MAX_WORKERS", "4"))
 
 DEFAULT_STRATEGY_ID = "a2c12b21-3191-11f1-9539-fa89d2391347"
 
@@ -47,14 +51,10 @@ module_engine = ModuleEngine()
 # =============================================================================
 
 def setup_modules(frequency: str = DEFAULT_FREQUENCY) -> None:
-    """
-    初始化因子模块和策略模块。
-    """
     register_factor_module(frequency)
     register_strategy_module()
 
     module_engine.start_all()
-
 
 def register_factor_module(frequency: str) -> None:
     """
@@ -69,10 +69,11 @@ def register_factor_module(frequency: str) -> None:
         config={
             "frequency": frequency,
             "maxlen": 30000,
+            "mode": DEFAULT_FACTOR_MODE,
+            "max_workers": DEFAULT_FACTOR_MAX_WORKERS,
             "strategy_module": "strategy",
         },
     )
-
 
 def register_strategy_module() -> None:
     """
@@ -118,7 +119,7 @@ def register_strategy_module() -> None:
 
 def init(context) -> None:
     """
-    GM 初始化回调。
+    GM 初始化回调
 
     这里负责：
     1. 启动模块系统；
@@ -127,46 +128,40 @@ def init(context) -> None:
     """
     setup_modules(frequency=DEFAULT_FREQUENCY)
 
-    pool = create_default_pool()
+    pool = create_default_pool(
+        query_date=DEFAULT_SUBSCRIPTION_QUERY_DATE,
+        fallback_days=DEFAULT_SUBSCRIPTION_FALLBACK_DAYS,
+    )
     symbol_list = pool.symbols()
 
-    # 调试阶段建议先限制数量，避免一次订阅 5000 多只。
     symbol_list = symbol_list[:5]
+
+    if not symbol_list:
+        print(
+            "[main.init] subscribe skipped: stock pool is empty",
+            flush=True,
+        )
+        return
 
     symbols = ",".join(symbol_list)
 
-    print(
-        f"[main.init] subscribe symbols count={len(symbol_list)}, "
-        f"symbols={symbols}",
-        flush=True,
-    )
+    print(f"[main.init] subscribe symbols count={len(symbol_list)}, " f"symbols={symbols}", flush=True,)
 
-    subscribe(
-        symbols=symbols,
-        frequency=DEFAULT_FREQUENCY,
-        count=30,
-    )
+    subscribe(symbols=symbols, frequency=DEFAULT_FREQUENCY, count=30,)
 
     print("[main.init] subscribe called", flush=True)
 
 
 def on_bar(context, bars) -> None:
     """
-    GM K线回调。
+    GM K线回调
     """
-    print(f"[main.on_bar] received bars, count={len(bars)}", flush=True)
+    converted_bars = [
+        convert_gm_bar(raw_bar, frequency=DEFAULT_FREQUENCY)
+        for raw_bar in bars
+    ]
 
-    for raw_bar in bars:
-        bar = convert_gm_bar(raw_bar, frequency=DEFAULT_FREQUENCY)
-
-        print(
-            f"[main.on_bar] symbol={bar.symbol}, "
-            f"bob={bar.bob}, "
-            f"close={bar.close}, "
-            f"volume={bar.volume}",
-            flush=True,
-        )
-
+    for bar in converted_bars:
         post_bar(bar, source="gm")
 
 
@@ -178,14 +173,8 @@ def algo(context) -> None:
         context.strategy.on_bar(context)
 
 
-# =============================================================================
-# 事件投递
-# =============================================================================
 
 def post_bar(bar: BarData, source: str) -> bool:
-    """
-    将K线投递给因子模块。
-    """
     return module_engine.post_event(
         target="factor",
         event=EngineEvent(
@@ -198,55 +187,21 @@ def post_bar(bar: BarData, source: str) -> bool:
 
 
 def wait_module_idle(name: str) -> None:
-    """
-    等待指定模块队列处理完成。
-    """
     node = module_engine.get_module(name)
     if node is None:
         return
 
     node._queue.join()
 
-
-# =============================================================================
-# 数据库回放
-# =============================================================================
-
-def run_db_replay(
-    db_path: str | Path,
-    frequency: str = DEFAULT_FREQUENCY,
-    symbols: Optional[str] = None,
-    start: Optional[str] = None,
-    end: Optional[str] = None,
-) -> None:
-    """
-    从 SQLite 数据库读取K线，并回放给模块系统。
-
-    表结构默认使用 bar_data：
-        symbol, bob, open, high, low, close, volume, amount, frequency
-    """
+def run_db_replay(db_path: str | Path, frequency: str = DEFAULT_FREQUENCY, symbols: Optional[str] = None, start: Optional[str] = None, end: Optional[str] = None,) -> None:
     setup_modules(frequency=frequency)
-
     symbol_list = parse_symbols(symbols)
-
-    print(
-        f"[DB] replay start, db_path={db_path}, "
-        f"frequency={frequency}, symbols={symbol_list}, "
-        f"start={start}, end={end}",
-        flush=True,
-    )
 
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
 
     try:
-        sql, params = build_bar_query(
-            frequency=frequency,
-            symbols=symbol_list,
-            start=start,
-            end=end,
-        )
-
+        sql, params = build_bar_query(frequency=frequency, symbols=symbol_list, start=start, end=end,)
         print(f"[DB] query sql={sql}", flush=True)
         print(f"[DB] query params={params}", flush=True)
 
@@ -268,7 +223,6 @@ def run_db_replay(
         wait_module_idle("factor")
         wait_module_idle("strategy")
 
-        print(f"[DB] replay finished, total_count={count}", flush=True)
 
     finally:
         conn.close()
@@ -276,21 +230,13 @@ def run_db_replay(
 
 
 def parse_symbols(symbols: Optional[str]) -> List[str]:
-    """
-    解析命令行传入的 symbols 参数。
-    """
     if not symbols:
         return []
 
     return [item.strip() for item in symbols.split(",") if item.strip()]
 
 
-def build_bar_query(
-    frequency: str,
-    symbols: List[str],
-    start: Optional[str],
-    end: Optional[str],
-) -> tuple[str, list]:
+def build_bar_query(frequency: str,  symbols: List[str], start: Optional[str], end: Optional[str],) -> tuple[str, list]:
     """
     构造数据库查询 SQL。
     """
@@ -321,9 +267,6 @@ def build_bar_query(
 
 
 def row_to_bar(row: sqlite3.Row) -> BarData:
-    """
-    将数据库行转换为 BarData。
-    """
     return BarData(
         symbol=str(row["symbol"]),
         bob=parse_datetime(row["bob"]),
@@ -338,9 +281,6 @@ def row_to_bar(row: sqlite3.Row) -> BarData:
 
 
 def parse_datetime(value) -> datetime:
-    """
-    兼容数据库里的时间格式。
-    """
     if isinstance(value, datetime):
         return value
 
@@ -394,9 +334,7 @@ def parse_args() -> argparse.Namespace:
     """
     解析命令行参数。
     """
-    parser = argparse.ArgumentParser(
-        description="Run quant modules with GM or database data."
-    )
+    parser = argparse.ArgumentParser(description="Run quant modules with GM or database data.")
 
     parser.add_argument("--db", help="sqlite database file path for bar replay")
     parser.add_argument("--frequency", default=DEFAULT_FREQUENCY, help="bar frequency")

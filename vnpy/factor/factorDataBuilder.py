@@ -4,5 +4,6 @@ from vnpy.factor.core.factorDataBuilder import (
     BasicVolatilityEngineFactor,
     BasicVolumeEngineFactor,
     FactorDataBuilder,
+    IntradayFadeReversalFactor,
+    VolumePriceReversalFactor,
 )
-

@@ -5,6 +5,8 @@ from .factorDataBuilder import (
     BasicVolatilityEngineFactor,
     BasicVolumeEngineFactor,
     FactorDataBuilder,
+    IntradayFadeReversalFactor,
+    VolumePriceReversalFactor,
 )
 from .factorEngine import (
     ExecutionMode,
@@ -16,4 +18,3 @@ from .factorEngine import (
     FactorValue,
 )
 from .factor_sample import FactorSample, FactorSampleBuilder, FastFactorSampleCache
-

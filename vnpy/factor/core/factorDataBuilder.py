@@ -6,6 +6,7 @@ from .factorEngine import Factor, FactorContext
 from vnpy.factor.momentum import MomentumFactor
 from vnpy.factor.volatility import VolatilityFactor
 from vnpy.factor.volume import VolumeFactor
+from vnpy.factor.reversal import IntradayFadeFactor, VolumePriceDivergenceFactor
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -17,9 +18,8 @@ from typing import Dict, List
 @dataclass(slots=True)
 class BarData:
     """
-    K线数据结构。
+    K线数据结构
     """
-
     symbol: str
     datetime: datetime
     frequency: str
@@ -65,11 +65,6 @@ def _to_int(value: str, default: int = 0) -> int:
 class FactorDataBuilder:
     """
     因子数据构建器
-
-    职责：
-    1. 从 BarCache 批量读取历史K线
-    2. 构造 FactorEngine 需要的 symbol_data_map
-    3. 避免每个因子重复读取 BarCache。
     """
 
     def __init__(self, bar_cache):
@@ -184,21 +179,12 @@ class BasicMomentumEngineFactor(Factor):
     适配 FactorEngine 的动量因子
     """
 
-    def __init__(
-        self,
-        window: int = 20,
-        up_threshold: float = 0.002,
-        down_threshold: float = -0.002,
-    ):
+    def __init__(self, window: int = 20, up_threshold: float = 0.002, down_threshold: float = -0.002,):
         self.window = window
         self.name = f"momentum_{window}"
         self.min_bars = window + 1
 
-        self.factor = MomentumFactor(
-            window=window,
-            up_threshold=up_threshold,
-            down_threshold=down_threshold,
-        )
+        self.factor = MomentumFactor(window=window, up_threshold=up_threshold, down_threshold=down_threshold,)
 
     def validate(self, symbol: str, data: Any, context: FactorContext) -> bool:
         return data is not None and len(data) >= self.min_bars
@@ -258,3 +244,100 @@ class BasicVolumeEngineFactor(Factor):
             return None
 
         return self.factor.calculate(symbol, closes, volumes)
+
+class VolumePriceReversalFactor(Factor):
+    """
+    适配 FactorEngine 的成交量因子
+    """
+    def __init__(
+        self,
+        window: int = 20,
+        price_threshold: float = 0.02,
+        volume_threshold: float = 0.20,
+        divergence_threshold: float = 0.20,
+    ):
+        self.window = window
+        self.name = f"price_volume_reversal_{window}"
+        self.min_bars = window + 1
+        self.factor = VolumePriceDivergenceFactor(
+            window=window,
+            price_threshold=price_threshold,
+            volume_threshold=volume_threshold,
+            divergence_threshold=divergence_threshold,
+        )
+
+    def validate(self, symbol: str, data: Any, context: FactorContext) -> bool:
+        return data is not None and len(data) >= self.min_bars
+
+    def calculate(self, symbol: str, data: Any, context: FactorContext):
+        closes = [bar.close for bar in data]
+        volumes = [bar.volume for bar in data]
+        if len(closes) < self.min_bars or len(volumes) < self.min_bars:
+            return None
+
+        return self.factor.calculate(symbol, closes, volumes)
+
+
+class IntradayFadeReversalFactor(Factor):
+    """
+    适配 FactorEngine 的盘中冲高回落因子
+    """
+
+    def __init__(
+        self,
+        volume_window: int = 20,
+        rise_threshold: float = 0.02,
+        fall_back_threshold: float = 0.01,
+        fall_ratio_threshold: float = 0.6,
+        volume_ratio_threshold: float = 1.5,
+    ):
+        self.volume_window = volume_window
+        self.name = f"intraday_fade_{volume_window}"
+        self.min_bars = volume_window + 1
+        self.factor = IntradayFadeFactor(
+            volume_window=volume_window,
+            rise_threshold=rise_threshold,
+            fall_back_threshold=fall_back_threshold,
+            fall_ratio_threshold=fall_ratio_threshold,
+            volume_ratio_threshold=volume_ratio_threshold,
+        )
+
+    def validate(self, symbol: str, data: Any, context: FactorContext) -> bool:
+        return data is not None and len(data) >= self.min_bars
+
+    def calculate(self, symbol: str, data: Any, context: FactorContext):
+        if len(data) < self.min_bars:
+            return None
+
+        current_bar = data[-1]
+        previous_volumes = [
+            self._get_float(bar, "volume")
+            for bar in data[:-1][-self.volume_window:]
+        ]
+        previous_volumes = [volume for volume in previous_volumes if volume > 0]
+
+        if not previous_volumes:
+            return None
+
+        avg_volume = sum(previous_volumes) / len(previous_volumes)
+
+        return self.factor.calculate(
+            symbol=symbol,
+            open_price=self._get_float(current_bar, "open"),
+            high_price=self._get_float(current_bar, "high"),
+            low_price=self._get_float(current_bar, "low"),
+            current_price=self._get_float(current_bar, "close"),
+            current_volume=self._get_float(current_bar, "volume"),
+            avg_volume=avg_volume,
+        )
+
+    def _get_float(self, bar: Any, field: str) -> float:
+        if isinstance(bar, dict):
+            value = bar.get(field, 0.0)
+        else:
+            value = getattr(bar, field, 0.0)
+
+        if value is None:
+            return 0.0
+
+        return float(value)
