@@ -3,7 +3,7 @@ from typing import Any
 
 import pandas as pd
 
-from vnpy.datafeed.BarCache import BarData
+from vnpy.datafeed.model import BarData, BarSource, normalize_bar
 
 
 class CsvBarDataFeed:
@@ -43,16 +43,11 @@ class CsvBarDataFeed:
         if dt_value is None:
             raise ValueError("CSV row is missing bob/datetime/time/date")
 
-        return BarData(
-            symbol=str(symbol),
-            bob=pd.to_datetime(dt_value).to_pydatetime(),
-            open=float(self._get_value(row, self.open_columns)),
-            high=float(self._get_value(row, self.high_columns)),
-            low=float(self._get_value(row, self.low_columns)),
-            close=float(self._get_value(row, self.close_columns)),
-            volume=float(self._get_value(row, self.volume_columns, 0)),
-            amount=float(self._get_value(row, self.amount_columns, 0)),
+        return normalize_bar(
+            row,
             frequency=self.frequency,
+            source=BarSource.CSV,
+            default_symbol=str(symbol),
         )
 
     @staticmethod

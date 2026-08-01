@@ -1,6 +1,6 @@
 from typing import List
 from vnpy.common.logger import get_logger
-from .Rule.Rule import RiskRule, RiskDecision, RiskAction
+from .rules.rule import RiskRule, RiskDecision, RiskAction
 
 
 class RiskEngine:

@@ -80,6 +80,9 @@ def _get_value(bar: Any, field: str) -> Any:
 class VolumeStallEngineFactor(Factor):
         def __init__(self, window: int = 20, price_threshold: float = 0.02, volume_threshold: float = 0.20, divergence_threshold: float = 0.20,) -> None:
             self.window = window
+            self.name = f"volume_stall_{window}"
+            self.min_bars = window
+            self.primary_field = "stall_score"
             self.price_threshold = price_threshold
             self.volume_threshold = volume_threshold
             self.divergence_threshold = divergence_threshold

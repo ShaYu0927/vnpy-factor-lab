@@ -1,0 +1,1 @@
+"""Single-momentum strategy package."""

@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Optional
 
-from vnpy.factor.core.factorEngine import Factor, FactorContext
+from vnpy.factor.core.factor_engine import Factor, FactorContext
 
 
 @dataclass
@@ -103,7 +103,8 @@ class IntradayFadeEngineFactor(Factor):
     ) -> None:
         self.volume_window = volume_window
         self.name = f"intraday_fade_{volume_window}"
-        self.min_bars = volume_window + 1
+        self.min_bars = volume_window * 2
+        self.primary_field = "factor"
         self.factor = IntradayFadeFactor(
             volume_window=volume_window,
             rise_threshold=rise_threshold,
@@ -123,9 +124,6 @@ class IntradayFadeEngineFactor(Factor):
         first_bar = window_bars[0]
         latest_bar = window_bars[-1]
 
-        latest_bar = data[-1]
-        avg_volume = self._average_previous_volume(data)
-
         open_price = self._get_float(first_bar, "open")
         high_price = max(self._get_float(bar, "high") for bar in window_bars)
         low_price = min(self._get_float(bar, "low") for bar in window_bars)
@@ -143,18 +141,6 @@ class IntradayFadeEngineFactor(Factor):
             current_volume=current_volume,
             avg_volume=avg_volume,
         )
-
-    def _average_previous_volume(self, data: Any) -> float:
-        volumes = [
-            self._get_float(bar, "volume")
-            for bar in data[:-1][-self.volume_window:]
-        ]
-        volumes = [volume for volume in volumes if volume > 0]
-
-        if not volumes:
-            return 0.0
-
-        return sum(volumes) / len(volumes)
 
     def _get_float(self, bar: Any, field: str) -> float:
         if isinstance(bar, dict):

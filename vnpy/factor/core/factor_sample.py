@@ -1,7 +1,6 @@
 from collections import defaultdict, deque
 from dataclasses import asdict, dataclass
-from typing import Deque, Dict, List, Optional
-from typing import Optional
+from typing import Any, Deque, Dict, List, Mapping, Optional
 import numpy as np
 
 
@@ -46,7 +45,7 @@ class FactorSample:
 
 class FactorSampleBuilder:
     """
-    因子样本构建器。
+    因子样本构建器
 
     作用：
     把当前K线 bar + 因子计算结果，组装成一条 FactorSample。
@@ -75,33 +74,49 @@ class FactorSampleBuilder:
             close=bar.close,
 
             # Momentum factor
-            momentum=getattr(momentum_result, "ret_1", 0.0),
-            strength=getattr(
+            momentum=FactorSampleBuilder._read(momentum_result, "ret_1", 0.0),
+            strength=FactorSampleBuilder._read(
                 momentum_result,
                 "strength",
-                getattr(momentum_result, "momentum_strength", 0.0),
+                FactorSampleBuilder._read(momentum_result, "momentum_strength", 0.0),
             ),
-            trend=getattr(momentum_result, "trend", "UNKNOWN"),
+            trend=FactorSampleBuilder._read(momentum_result, "trend", "UNKNOWN"),
 
             # Volume factor
-            volatility=getattr(volatility_result, "volatility", 0.0),
-            latest_volume=getattr(volume_result, "latest_volume", 0.0),
-            volume_ma5=getattr(volume_result, "volume_ma5", 0.0),
-            volume_ma10=getattr(volume_result, "volume_ma10", 0.0),
-            volume_ratio=getattr(volume_result, "volume_ratio", 0.0),
-            volume_change=getattr(volume_result, "volume_change", 0.0),
-            volume_level=getattr(volume_result, "volume_level", "UNKNOWN"),
-            price_volume_signal=getattr(volume_result, "price_volume_signal", "UNKNOWN"),
+            volatility=FactorSampleBuilder._read(volatility_result, "volatility", 0.0),
+            latest_volume=FactorSampleBuilder._read(volume_result, "latest_volume", 0.0),
+            volume_ma5=FactorSampleBuilder._read(volume_result, "volume_ma5", 0.0),
+            volume_ma10=FactorSampleBuilder._read(volume_result, "volume_ma10", 0.0),
+            volume_ratio=FactorSampleBuilder._read(volume_result, "volume_ratio", 0.0),
+            volume_change=FactorSampleBuilder._read(volume_result, "volume_change", 0.0),
+            volume_level=FactorSampleBuilder._read(volume_result, "volume_level", "UNKNOWN"),
+            price_volume_signal=FactorSampleBuilder._read(volume_result, "price_volume_signal", "UNKNOWN"),
 
             # Explanation
-            momentum_reason=getattr(momentum_result, "reason", ""),
-            volume_reason=getattr(volume_result, "reason", ""),
+            momentum_reason=FactorSampleBuilder._read(momentum_result, "reason", ""),
+            volume_reason=FactorSampleBuilder._read(volume_result, "reason", ""),
 
             # Label 后面再补
             future_ret_5=None,
         )
 
         return sample
+
+    @staticmethod
+    def _read(result: Any, field_name: str, default: Any) -> Any:
+        """Read both normalized FactorValue and legacy result objects."""
+        if result is None:
+            return default
+
+        fields = getattr(result, "fields", None)
+        if isinstance(fields, Mapping) and field_name in fields:
+            return fields[field_name]
+
+        if getattr(result, "primary_field", None) == field_name:
+            value = getattr(result, "value", None)
+            return default if value is None else value
+
+        return getattr(result, field_name, default)
 
 class FastFactorSampleCache:
     """

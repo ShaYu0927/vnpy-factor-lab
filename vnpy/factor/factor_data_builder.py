@@ -1,4 +1,4 @@
-from vnpy.factor.core.factorDataBuilder import (
+from vnpy.factor.core.factor_data_builder import (
     BarData,
     BasicMomentumEngineFactor,
     BasicVolatilityEngineFactor,

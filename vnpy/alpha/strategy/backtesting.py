@@ -1,13 +1,13 @@
+from __future__ import annotations
+
 from collections import defaultdict
 from datetime import date, datetime
 from copy import copy
-from typing import cast
+from typing import TYPE_CHECKING, cast
 import traceback
 
 import numpy as np
 import polars as pl
-import plotly.graph_objects as go               # type: ignore
-from plotly.subplots import make_subplots       # type: ignore
 from tqdm import tqdm
 
 from vnpy.trader.constant import Direction, Offset, Interval, Status
@@ -15,8 +15,11 @@ from vnpy.trader.object import OrderData, TradeData, BarData
 from vnpy.trader.utility import round_to, extract_vt_symbol
 
 from ..logger import logger
-from ..lab import AlphaLab
 from .template import AlphaStrategy
+
+
+if TYPE_CHECKING:
+    from ..lab import AlphaLab
 
 
 class BacktestingEngine:
@@ -60,7 +63,7 @@ class BacktestingEngine:
         self.logs: list[str] = []
 
         self.daily_results: dict[date, PortfolioDailyResult] = {}
-        self.daily_df: pl.DataFrame
+        self.daily_df: pl.DataFrame | None = None
 
         self.pre_closes: defaultdict = defaultdict(float)
 
@@ -163,7 +166,7 @@ class BacktestingEngine:
             except Exception:
                 logger.info("触发异常，回测终止")
                 logger.info(traceback.format_exc())
-                return
+                raise
 
         logger.info("历史数据回放结束")
 
@@ -171,9 +174,15 @@ class BacktestingEngine:
         """Calculate daily mark-to-market profit and loss"""
         logger.info("开始计算逐日盯市盈亏")
 
-        if not self.trades:
-            logger.info("成交记录为空，无法计算")
+        if not self.daily_results:
+            logger.info("每日收盘记录为空，无法计算")
             return None
+
+        # Rebuild calculation containers so repeated calls remain idempotent.
+        self.daily_results = {
+            d: PortfolioDailyResult(d, dict(result.close_prices))
+            for d, result in self.daily_results.items()
+        }
 
         for trade in self.trades.values():
             if not trade.datetime:
@@ -258,7 +267,7 @@ class BacktestingEngine:
         positive_balance: bool = False
 
         # Calculate capital-related metrics
-        df: pl.DataFrame = self.daily_df
+        df: pl.DataFrame | None = self.daily_df
 
         if df is not None:
             df = df.with_columns(
@@ -330,7 +339,8 @@ class BacktestingEngine:
             else:
                 sharpe_ratio = 0
 
-            return_drawdown_ratio = -total_net_pnl / max_drawdown
+            if max_drawdown:
+                return_drawdown_ratio = -total_net_pnl / max_drawdown
 
         # Output results
         logger.info("-" * 30)
@@ -403,6 +413,13 @@ class BacktestingEngine:
 
     def show_chart(self) -> None:
         """Display chart"""
+        import plotly.graph_objects as go  # type: ignore
+        from plotly.subplots import make_subplots  # type: ignore
+
+        if self.daily_df is None:
+            logger.info("回测结果为空，无法绘图")
+            return
+
         df: pl.DataFrame = self.daily_df
 
         fig = make_subplots(
@@ -439,6 +456,13 @@ class BacktestingEngine:
 
     def show_performance(self, benchmark_symbol: str) -> None:
         """Display performance metrics"""
+        import plotly.graph_objects as go  # type: ignore
+        from plotly.subplots import make_subplots  # type: ignore
+
+        if self.daily_df is None:
+            logger.info("回测结果为空，无法展示绩效")
+            return
+
         # Load benchmark prices
         benchmark_bars: list[BarData] = self.lab.load_bar_data(benchmark_symbol, self.interval, self.start, self.end)
 
@@ -611,25 +635,33 @@ class BacktestingEngine:
                 )
                 self.bars[vt_symbol] = fill_bar
 
-        self.cross_order()
+        # Only real bars are tradable. Forward-filled bars are kept in
+        # ``self.bars`` for valuation, but must not fill orders while a symbol
+        # is suspended or otherwise has no market data for this timestamp.
+        self.cross_order(bars)
         self.strategy.on_bars(bars)
 
         self.update_daily_close(self.bars, dt)
 
-    def cross_order(self) -> None:
+    def cross_order(self, tradable_bars: dict[str, BarData] | None = None) -> None:
         """Match limit orders"""
+        if tradable_bars is None:
+            tradable_bars = self.bars
+
         for order in list(self.active_limit_orders.values()):
-            bar: BarData = self.bars[order.vt_symbol]
+            # Push order status update for unfilled orders
+            if order.status == Status.SUBMITTING:
+                order.status = Status.NOTTRADED
+                self.strategy.update_order(order)
+
+            bar: BarData | None = tradable_bars.get(order.vt_symbol)
+            if bar is None:
+                continue
 
             long_cross_price: float = bar.low_price
             short_cross_price: float = bar.high_price
             long_best_price: float = bar.open_price
             short_best_price: float = bar.open_price
-
-            # Push order status update for unfilled orders
-            if order.status == Status.SUBMITTING:
-                order.status = Status.NOTTRADED
-                self.strategy.update_order(order)
 
             # Calculate price limits
             pricetick: float = self.priceticks[order.vt_symbol]

@@ -1,7 +1,7 @@
-from vnpy.datafeed.BarCache import BarCache
+from vnpy.datafeed.bar_cache import BarCache
 from vnpy.event.base_module import BaseModule, make_module_entry
 from vnpy.event.event import EngineEvent, EventType
-from vnpy.factor.core.factorEngine import ExecutionMode
+from vnpy.factor.core.factor_engine import ExecutionMode
 from vnpy.factor.core.factor_sample import FastFactorSampleCache
 from vnpy.factor.realtime_service import RealtimeFactorService
 
@@ -26,6 +26,17 @@ class RealtimeFactorModule(BaseModule):
         self.set_state("latest_symbol", sample.symbol)
         self.set_state("latest_datetime", sample.datetime)
         self.set_state("latest_factor_result", service.latest_batch_result)
+
+        if self.get_config("enable_print", True):
+            event_count = int(self.get_state("factor_event_count", 0)) + 1
+            self.set_state("factor_event_count", event_count)
+            print_every = max(1, int(self.get_config("print_every", 20)))
+            if event_count % print_every == 0:
+                self._print_factor_event(
+                    sample,
+                    service.latest_batch_result,
+                    event_count,
+                )
 
         self.post(
             target=self.get_config("strategy_module", "strategy"),
@@ -65,5 +76,23 @@ class RealtimeFactorModule(BaseModule):
         self.set_object("factor_service", service)
         return service
 
+    def _print_factor_event(self, sample, factor_result, event_count: int) -> None:
+        values = getattr(factor_result, "values", []) or []
+        errors = getattr(factor_result, "errors", []) or []
+        factor_values = []
+
+        for value in values:
+            factor_name = getattr(value, "factor_name", "")
+            display_value = getattr(value, "value", None)
+            if factor_name and display_value is not None:
+                factor_values.append(f"{factor_name}={display_value:.6f}")
+
+        print(
+            f"[factor] #{event_count} "
+            f"symbol={sample.symbol} "
+            f"datetime={sample.datetime} "
+            f"{' '.join(factor_values)} "
+            f"errors={len(errors)}"
+        )
 
 factor_module_entry = make_module_entry(RealtimeFactorModule)

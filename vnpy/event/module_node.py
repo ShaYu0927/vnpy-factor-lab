@@ -1,3 +1,4 @@
+import atexit
 from queue import Queue, Empty
 from threading import Thread, Event
 from typing import Callable, Optional
@@ -7,6 +8,16 @@ from .event import EngineEvent, EventType
 
 
 ModuleEntry = Callable[[ModuleContext, EngineEvent], None]
+
+_INTERPRETER_SHUTTING_DOWN = False
+
+
+def _mark_interpreter_shutting_down() -> None:
+    global _INTERPRETER_SHUTTING_DOWN
+    _INTERPRETER_SHUTTING_DOWN = True
+
+
+atexit.register(_mark_interpreter_shutting_down)
 
 
 class ModuleNode:
@@ -94,6 +105,9 @@ class ModuleNode:
         """
         向当前模块自己的队列投递事件
         """
+        if _INTERPRETER_SHUTTING_DOWN:
+            return False
+
         if self._queue.full():
             print(f"[ModuleNode:{self.name}] queue full, "f"drop event_id={event.event_id}, event_type={event.event_type}")
             return False
@@ -122,6 +136,10 @@ class ModuleNode:
                 event = self._queue.get(timeout=1)
             except Empty:
                 continue
+
+            if _INTERPRETER_SHUTTING_DOWN:
+                self._queue.task_done()
+                break
 
             if event.event_type == EventType.STOP:
                 self._queue.task_done()

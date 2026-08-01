@@ -152,7 +152,7 @@ def create_baostock_pool(
     """
     从 BaoStock 生成沪深 A 股股票池
     """
-    from vnpy.datafeed.BaostockFinancialClient import BaostockFinancialClient
+    from vnpy.datafeed.baostock_financial_client import BaostockFinancialClient
 
     actual_query_date = _query_date_or_today(query_date)
     fallback_days = max(0, fallback_days)

@@ -1,11 +1,11 @@
 from vnpy.event.engine import ModuleEngine
 from vnpy.event.event import EngineEvent, EventType
-from vnpy.factor.factorEngine import FactorBatchResult, FactorValue
+from vnpy.factor.factor_engine import FactorBatchResult, FactorValue
 from vnpy.factor.factor_sample import FactorSample
-from vnpy.strategy.StratContext import SignalDirection
-from vnpy.strategy.StratEngine import StrategyEngine
-from vnpy.strategy.StratModule import strategy_engine_module_entry
-from vnpy.strategy.StratTemplate import StrategyTemplate
+from vnpy.strategy.strategy_context import SignalDirection
+from vnpy.strategy.strategy_engine import StrategyEngine
+from vnpy.strategy.strategy_module import strategy_engine_module_entry
+from vnpy.strategy.strategy_template import StrategyTemplate
 
 
 def create_buy_sample() -> FactorSample:

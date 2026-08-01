@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from abc import ABC
 from typing import Any, Sequence, Union
-from vnpy.strategy.StratContext import StrategyContext, TargetPosition, StrategySignal
+from vnpy.strategy.strategy_context import StrategyContext, TargetPosition, StrategySignal
 
 
 StrategyOutput = Union[StrategySignal, TargetPosition]

@@ -1,15 +1,15 @@
 from typing import Mapping, Optional, Sequence
 
-from vnpy.datafeed.BarCache import BarCache
+from vnpy.datafeed.bar_cache import BarCache
 from vnpy.factor.core.basic_factor import BasicFactorResult
-from vnpy.factor.core.factorDataBuilder import (
+from vnpy.factor.core.factor_data_builder import (
     BasicMomentumEngineFactor,
     BasicVolatilityEngineFactor,
     BasicVolumeEngineFactor,
     IntradayFadeReversalFactor,
     VolumePriceReversalFactor,
 )
-from vnpy.factor.core.factorEngine import (
+from vnpy.factor.core.factor_engine import (
     ExecutionMode,
     Factor,
     FactorBatchResult,
@@ -98,14 +98,30 @@ class FactorSampleAssembler:
     """
 
     def build_sample(self, bar, batch_result: FactorBatchResult,) -> Optional[FactorSample]:
-        result = self.to_basic_result(bar.symbol, batch_result)
+        values = batch_result.for_symbol(bar.symbol)
+        momentum_result = self._find(values, "momentum_")
+        volatility_result = self._find(values, "volatility_")
+        volume_result = self._find(values, "volume_", excluded_prefix="volume_price_")
 
         return FactorSampleBuilder.build(
             bar=bar,
-            momentum_result=result.momentum,
-            volume_result=result.volume,
-            volatility_result=result.volatility,
+            momentum_result=momentum_result,
+            volume_result=volume_result,
+            volatility_result=volatility_result,
         )
+
+    @staticmethod
+    def _find(
+        values: Mapping[str, object],
+        prefix: str,
+        excluded_prefix: Optional[str] = None,
+    ) -> Optional[object]:
+        for factor_name, value in values.items():
+            if factor_name.startswith(prefix) and not (
+                excluded_prefix and factor_name.startswith(excluded_prefix)
+            ):
+                return value
+        return None
 
     @staticmethod
     def to_basic_result(symbol: str, batch_result: FactorBatchResult) -> BasicFactorResult:
@@ -113,11 +129,11 @@ class FactorSampleAssembler:
 
         for value in batch_result.values:
             if value.factor_name.startswith("momentum_"):
-                result.momentum = value.value
+                result.momentum = value.raw_value
             elif value.factor_name.startswith("volatility_"):
-                result.volatility = value.value
+                result.volatility = value.raw_value
             elif value.factor_name.startswith("volume_") and not value.factor_name.startswith("volume_price_"):
-                result.volume = value.value
+                result.volume = value.raw_value
 
         return result
 

@@ -4,7 +4,7 @@ from typing import Any
 
 from vnpy.event.base_module import BaseModule, make_module_entry
 from vnpy.event.event import EngineEvent, EventType
-from vnpy.strategy.StratEngine import StrategyEngine
+from vnpy.strategy.strategy_engine import StrategyEngine
 
 
 class StrategyEngineModule(BaseModule):

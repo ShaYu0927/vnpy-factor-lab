@@ -3,8 +3,8 @@ from __future__ import annotations
 from typing import Any
 
 from vnpy.strategy.ml_signal_strategy import MlSignalStrategy, SignalAction
-from vnpy.strategy.StratTemplate import StrategyTemplate, StrategyOutput
-from vnpy.strategy.StratContext import StrategyContext, StrategySignal, SignalDirection
+from vnpy.strategy.strategy_template import StrategyTemplate, StrategyOutput
+from vnpy.strategy.strategy_context import StrategyContext, StrategySignal, SignalDirection
 
 
 class FactorSignalStrategy(StrategyTemplate):

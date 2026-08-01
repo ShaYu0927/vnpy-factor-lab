@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from vnpy.strategy.StratContext import StrategyContext
-from vnpy.strategy.StratTemplate import StrategyOutput, StrategyTemplate
+from vnpy.strategy.strategy_context import StrategyContext
+from vnpy.strategy.strategy_template import StrategyOutput, StrategyTemplate
 
 
 class FactorDebugStrategy(StrategyTemplate):

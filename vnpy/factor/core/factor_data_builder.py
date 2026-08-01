@@ -2,7 +2,7 @@ import csv
 from typing import Dict, List, Optional
 from typing import Any
 
-from .factorEngine import Factor, FactorContext
+from .factor_engine import Factor, FactorContext
 from vnpy.factor.momentum import MomentumFactor
 from vnpy.factor.volatility import VolatilityFactor
 from vnpy.factor.volume import VolumeFactor
@@ -183,6 +183,7 @@ class BasicMomentumEngineFactor(Factor):
         self.window = window
         self.name = f"momentum_{window}"
         self.min_bars = window + 1
+        self.primary_field = "momentum"
 
         self.factor = MomentumFactor(window=window, up_threshold=up_threshold, down_threshold=down_threshold,)
 
@@ -207,6 +208,7 @@ class BasicVolatilityEngineFactor(Factor):
         self.window = window
         self.name = f"volatility_{window}"
         self.min_bars = window + 1
+        self.primary_field = "volatility"
 
         self.factor = VolatilityFactor(window=window)
 
@@ -230,6 +232,7 @@ class BasicVolumeEngineFactor(Factor):
         self.window = window
         self.name = f"volume_{window}"
         self.min_bars = window + 1
+        self.primary_field = "volume_ratio"
 
         self.factor = VolumeFactor(window=window)
 
@@ -259,6 +262,7 @@ class VolumePriceReversalFactor(Factor):
         self.window = window
         self.name = f"price_volume_reversal_{window}"
         self.min_bars = window + 1
+        self.primary_field = "score"
         self.factor = VolumePriceDivergenceFactor(
             window=window,
             price_threshold=price_threshold,
@@ -294,6 +298,7 @@ class IntradayFadeReversalFactor(Factor):
         self.volume_window = volume_window
         self.name = f"intraday_fade_{volume_window}"
         self.min_bars = volume_window + 1
+        self.primary_field = "factor"
         self.factor = IntradayFadeFactor(
             volume_window=volume_window,
             rise_threshold=rise_threshold,

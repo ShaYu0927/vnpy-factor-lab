@@ -5,10 +5,10 @@ from importlib import import_module
 from typing import Any, Callable, DefaultDict, Iterable, Optional, Sequence
 
 from vnpy.event.event import EngineEvent, EventType
-from vnpy.risk.RiskContext import OrderRequest
-from vnpy.risk.Rule.Rule import RiskAction
-from vnpy.strategy.StratContext import StrategyContext, StrategySignal, TargetPosition
-from vnpy.strategy.StratTemplate import StrategyOutput, StrategyTemplate
+from vnpy.risk.risk_context import OrderRequest
+from vnpy.risk.rules.rule import RiskAction
+from vnpy.strategy.strategy_context import StrategyContext, StrategySignal, TargetPosition
+from vnpy.strategy.strategy_template import StrategyOutput, StrategyTemplate
 
 
 # -----------------------------------------------------------------------------

@@ -4,7 +4,7 @@ from dataclasses import dataclass
 import math
 from typing import Any, Optional
 
-from vnpy.factor.core.factorEngine import Factor, FactorContext
+from vnpy.factor.core.factor_engine import Factor, FactorContext
 
 
 @dataclass
@@ -270,6 +270,7 @@ class VolumePriceDivergenceEngineFactor(Factor):
         self.window = window
         self.name = f"volume_price_divergence_{window}"
         self.min_bars = window + 1
+        self.primary_field = "score"
         self.factor = VolumePriceDivergenceFactor(
             window=window,
             price_threshold=price_threshold,

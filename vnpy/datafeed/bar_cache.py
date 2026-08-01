@@ -1,40 +1,28 @@
 
-from ast import Dict
 from collections import defaultdict, deque
-from dataclasses import dataclass
-import datetime
 from typing import List, Optional, Tuple
 
+from vnpy.datafeed.model import MarketBar, normalize_bar
 
-    # In-memory cache for gm.api bar data.
 
-    # This cache stores the latest N bars for each symbol and frequency.
-    # It is mainly used to provide recent historical bars for factor calculation,
-    # signal generation, and strategy decision-making.
+# In-memory cache for gm.api bar data.
 
-    # The cache is organized by:
-    #     key:   (symbol, frequency)
-    #     value: deque[BarData]
+# This cache stores the latest N bars for each symbol and frequency.
+# It is mainly used to provide recent historical bars for factor calculation,
+# signal generation, and strategy decision-making.
 
-    # Example:
-    #     ("SHSE.600000", "60s") -> latest 1000 60-second bars
-    #     ("SZSE.000001", "1d")  -> latest 1000 daily bars
+# The cache is organized by:
+#     key:   (symbol, frequency)
+#     value: deque[BarData]
 
-@dataclass
-class BarData:
-    symbol: str                         # 股票
-    bob: datetime                       # Bar 开始时间，bob = beginning of bar，例如 09:31:00 这一根K线的开始时间
+# Example:
+#     ("SHSE.600000", "60s") -> latest 1000 60-second bars
+#     ("SZSE.000001", "1d")  -> latest 1000 daily bars
 
-    open: float                         # 开盘价
-    high: float                         # 最高价
-    low: float                          # 最低价
-    close: float                        # 收盘价
+# Keep the historical import path working while using the canonical model.
+BarData = MarketBar
 
-    volume: float                       # 成交量
-    amount: Optional[float] = None      # 成交额，可选字段；部分数据源可能没有成交额
 
-    frequency: str = "60s"              # K线周期，默认 60s；例如：60s、300s、900s、1d
-    
 class BarCache:
     def __init__(self, maxlen: int = 1000):
         self.maxlen = maxlen
@@ -113,32 +101,5 @@ class BarCache:
     def clear_all(self) -> None:
         self._bars.clear()
 
-def get_bar_value(raw_bar, key: str):
-    if isinstance(raw_bar, dict):
-        return raw_bar.get(key)
-
-    return getattr(raw_bar, key, None)
-
-
-def to_float(value, default: float = 0.0) -> float:
-    if value is None:
-        return default
-
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return default
-
-
 def convert_gm_bar(raw_bar, frequency: str = "60s") -> BarData:
-    return BarData(
-        symbol=get_bar_value(raw_bar, "symbol"),
-        bob=get_bar_value(raw_bar, "bob"),
-        open=to_float(get_bar_value(raw_bar, "open")),
-        high=to_float(get_bar_value(raw_bar, "high")),
-        low=to_float(get_bar_value(raw_bar, "low")),
-        close=to_float(get_bar_value(raw_bar, "close")),
-        volume=to_float(get_bar_value(raw_bar, "volume")),
-        amount=to_float(get_bar_value(raw_bar, "amount"), default=0.0),
-        frequency=frequency,
-    )
+    return normalize_bar(raw_bar, frequency=frequency, source="gm-live")

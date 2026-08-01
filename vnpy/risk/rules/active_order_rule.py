@@ -1,4 +1,4 @@
-from .Rule import RiskRule, RiskDecision, RiskAction
+from .rule import RiskRule, RiskDecision, RiskAction
 
 
 class ActiveOrderRule(RiskRule):

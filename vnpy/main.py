@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import argparse
-import os
 import sqlite3
 import sys
+import time
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, List
@@ -14,34 +14,19 @@ if __package__ in {None, ""}:
 from gm.api import *
 
 from vnpy.common.logger import init_global_logger
-from vnpy.datafeed.BarCache import BarData, convert_gm_bar
+from vnpy.datafeed.bar_cache import convert_gm_bar
+from vnpy.datafeed.gm_local_datafeed import GmLocalDataFeed
+from vnpy.datafeed.gm_sqlite_datafeed import GmSqliteDataFeed
+from vnpy.datafeed.model import BarData, BarSource, normalize_bar
 from vnpy.event.engine import ModuleEngine
 from vnpy.event.event import EngineEvent, EventType
 from vnpy.factor.realtime_module import factor_module_entry
-from vnpy.strategy.StratModule import strategy_engine_module_entry
+from vnpy.config.runtime_config import DEFAULT_BACKTEST_END_TIME, DEFAULT_BACKTEST_START_TIME, DEFAULT_COMMISSION_RATIO, DEFAULT_FACTOR_MAX_WORKERS, DEFAULT_FACTOR_MODE, DEFAULT_FREQUENCY, DEFAULT_GM_TOKEN, DEFAULT_INITIAL_CASH, DEFAULT_RUNTIME_CONFIG, DEFAULT_SLIPPAGE_RATIO, DEFAULT_STRATEGY_ID, DEFAULT_SUBSCRIPTION_FALLBACK_DAYS, DEFAULT_SUBSCRIPTION_QUERY_DATE, GmSqliteConfig, RunMode, RuntimeConfig, load_runtime_config
+from vnpy.factor.batch_runner import run_gm_sqlite_batch
+from vnpy.strategy.strategy_module import strategy_engine_module_entry
 from vnpy.subscription.pool import create_default_pool
 
 
-# =============================================================================
-# 全局配置
-# =============================================================================
-
-DEFAULT_FREQUENCY = "60s"
-DEFAULT_SUBSCRIPTION_QUERY_DATE = os.getenv("VNPY_SUBSCRIPTION_QUERY_DATE")
-DEFAULT_SUBSCRIPTION_FALLBACK_DAYS = int(os.getenv("VNPY_SUBSCRIPTION_FALLBACK_DAYS", "7"))
-DEFAULT_FACTOR_MODE = os.getenv("VNPY_FACTOR_MODE", "thread")
-DEFAULT_FACTOR_MAX_WORKERS = int(os.getenv("VNPY_FACTOR_MAX_WORKERS", "4"))
-
-DEFAULT_STRATEGY_ID = "a2c12b21-3191-11f1-9539-fa89d2391347"
-
-DEFAULT_BACKTEST_START_TIME = "2026-03-01 08:00:00"
-DEFAULT_BACKTEST_END_TIME = "2026-04-30 16:00:00"
-
-DEFAULT_INITIAL_CASH = 10_000_000
-DEFAULT_COMMISSION_RATIO = 0.0001
-DEFAULT_SLIPPAGE_RATIO = 0.0001
-
-EVENT_ML_SIGNAL = "eMlSignal"
 
 module_engine = ModuleEngine()
 
@@ -72,6 +57,8 @@ def register_factor_module(frequency: str) -> None:
             "mode": DEFAULT_FACTOR_MODE,
             "max_workers": DEFAULT_FACTOR_MAX_WORKERS,
             "strategy_module": "strategy",
+            "enable_print": True,
+            "print_every": 20,
         },
     )
 
@@ -93,18 +80,18 @@ def register_strategy_module() -> None:
                     "active": True,
                     "factors": ["momentum_20", "volatility_20", "volume_20"],
                     "setting": {
-                        "enable_log": True,
-                        "enable_print": True,
+                        "enable_log": False,
+                        "enable_print": False,
                     },
                 },
                 {
                     "name": "factor_debug",
-                    "class": "vnpy.strategy.strategies.FactorDebugStrategy.factor_debug_strategy.FactorDebugStrategy",
-                    "active": True,
+                    "class": "vnpy.strategy.strategies.factor_debug.factor_debug_strategy.FactorDebugStrategy",
+                    "active": False,
                     "factors": ["momentum_20", "volatility_20", "volume_20"],
                     "setting": {
                         "print_limit": 20,
-                        "print_factor_values": True,
+                        "print_factor_values": False,
                         "max_factor_values": 10,
                     },
                 },
@@ -162,7 +149,7 @@ def on_bar(context, bars) -> None:
     ]
 
     for bar in converted_bars:
-        post_bar(bar, source="gm")
+        post_bar(bar, source=BarSource.GM_LIVE.value)
 
 
 def algo(context) -> None:
@@ -173,8 +160,8 @@ def algo(context) -> None:
         context.strategy.on_bar(context)
 
 
-
 def post_bar(bar: BarData, source: str) -> bool:
+    bar = normalize_bar(bar, source=source)
     return module_engine.post_event(
         target="factor",
         event=EngineEvent(
@@ -209,7 +196,7 @@ def run_db_replay(db_path: str | Path, frequency: str = DEFAULT_FREQUENCY, symbo
 
         for row in conn.execute(sql, params):
             bar = row_to_bar(row)
-            post_bar(bar, source="db")
+            post_bar(bar, source=BarSource.SQLITE.value)
 
             count += 1
 
@@ -229,6 +216,131 @@ def run_db_replay(db_path: str | Path, frequency: str = DEFAULT_FREQUENCY, symbo
         module_engine.stop_all()
 
 
+def run_gm_local_replay(
+    symbols: str,
+    frequency: str = DEFAULT_FREQUENCY,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    count: Optional[int] = None,
+) -> None:
+    """Replay downloaded GM bars through the normal module event pipeline."""
+    feed = GmLocalDataFeed(token=DEFAULT_GM_TOKEN)
+
+    if count is not None:
+        bars = feed.load_recent(
+            symbols=symbols,
+            frequency=frequency,
+            count=count,
+            end=end,
+        )
+    else:
+        if not start or not end:
+            raise ValueError("--gm-local requires --start and --end, or --count")
+        bars = feed.load_history(
+            symbols=symbols,
+            frequency=frequency,
+            start=start,
+            end=end,
+        )
+
+    setup_modules(frequency=frequency)
+    print_gm_local_summary(bars, frequency)
+
+    try:
+        for index, bar in enumerate(bars, start=1):
+            post_bar(bar, source=BarSource.GM_LOCAL.value)
+            if index % 1000 == 0:
+                print(
+                    f"[GM local] replaying, count={index}, "
+                    f"last_symbol={bar.symbol}, last_bob={bar.bob}",
+                    flush=True,
+                )
+
+        wait_module_idle("factor")
+        wait_module_idle("strategy")
+    finally:
+        module_engine.stop_all()
+
+
+def run_gm_sqlite_replay(config: GmSqliteConfig) -> None:
+    """Stream GM yearly SQLite bars through the existing factor pipeline."""
+    feed = GmSqliteDataFeed(config.root)
+    setup_modules(frequency=config.frequency)
+    symbols = parse_symbols(config.symbols)
+    first_bar: BarData | None = None
+    last_bar: BarData | None = None
+    symbol_set: set[str] = set()
+    count = 0
+
+    print(
+        f"[GM sqlite] root={feed.day_bar_dir} markets={config.markets} "
+        f"range={config.start} -> {config.end} frequency={config.frequency}",
+        flush=True,
+    )
+
+    try:
+        bars = feed.iter_history(
+            start=config.start,
+            end=config.end,
+            symbols=symbols,
+            markets=config.markets,
+            frequency=config.frequency,
+            skip_zero_volume=config.skip_zero_volume,
+            skip_invalid_ohlc=config.skip_invalid_ohlc,
+            allow_missing_years=config.allow_missing_years,
+        )
+        for bar in bars:
+            while module_engine.queue_size("factor") >= config.max_inflight:
+                time.sleep(0.005)
+
+            if not post_bar(bar, source=BarSource.GM_SQLITE.value):
+                raise RuntimeError("factor queue rejected a GM SQLite bar")
+
+            count += 1
+            first_bar = first_bar or bar
+            last_bar = bar
+            symbol_set.add(bar.symbol)
+            if count % config.progress_every == 0:
+                print(
+                    f"[GM sqlite] replaying, count={count}, "
+                    f"symbols={len(symbol_set)}, last_symbol={bar.symbol}, "
+                    f"last_bob={bar.bob}",
+                    flush=True,
+                )
+
+        wait_module_idle("factor")
+        wait_module_idle("strategy")
+        print(
+            f"[GM sqlite] completed bars={count} symbols={len(symbol_set)} "
+            f"range={getattr(first_bar, 'bob', None)} -> "
+            f"{getattr(last_bar, 'bob', None)}",
+            flush=True,
+        )
+    finally:
+        module_engine.stop_all()
+
+
+def print_gm_local_summary(bars: List[BarData], frequency: str) -> None:
+    if not bars:
+        print(f"[GM local] loaded bars=0 frequency={frequency}", flush=True)
+        return
+
+    counts = Counter(bar.symbol for bar in bars)
+    symbol_counts = ", ".join(
+        f"{symbol}:{count}" for symbol, count in sorted(counts.items())
+    )
+    first_bob = min(bar.bob for bar in bars)
+    last_bob = max(bar.bob for bar in bars)
+
+    print(
+        f"[GM local] loaded bars={len(bars)} "
+        f"symbols={len(counts)} frequency={frequency} "
+        f"range={first_bob} -> {last_bob} "
+        f"counts=[{symbol_counts}]",
+        flush=True,
+    )
+
+
 def parse_symbols(symbols: Optional[str]) -> List[str]:
     if not symbols:
         return []
@@ -237,15 +349,6 @@ def parse_symbols(symbols: Optional[str]) -> List[str]:
 
 
 def build_bar_query(frequency: str,  symbols: List[str], start: Optional[str], end: Optional[str],) -> tuple[str, list]:
-    """
-    构造数据库查询 SQL。
-    """
-    sql = """
-        SELECT symbol, bob, open, high, low, close, volume, amount, frequency
-        FROM bar_data
-        WHERE frequency = ?
-    """
-
     params: list = [frequency]
 
     if symbols:
@@ -267,17 +370,7 @@ def build_bar_query(frequency: str,  symbols: List[str], start: Optional[str], e
 
 
 def row_to_bar(row: sqlite3.Row) -> BarData:
-    return BarData(
-        symbol=str(row["symbol"]),
-        bob=parse_datetime(row["bob"]),
-        open=float(row["open"]),
-        high=float(row["high"]),
-        low=float(row["low"]),
-        close=float(row["close"]),
-        volume=float(row["volume"]),
-        amount=None if row["amount"] is None else float(row["amount"]),
-        frequency=str(row["frequency"]),
-    )
+    return normalize_bar(dict(row),source=BarSource.SQLITE,)
 
 
 def parse_datetime(value) -> datetime:
@@ -286,39 +379,32 @@ def parse_datetime(value) -> datetime:
 
     return datetime.fromisoformat(str(value))
 
-
-
-def run_gm_backtest() -> None:
+def run_gm_backtest(config=None) -> None:
     """
     启动 GM 回测。
     """
-    token = os.getenv("GM_TOKEN", "")
-
-    if not token:
-        token = "ad3b5bc0baaf82a4572f36cff8242f448063e439"
+    strategy_id = config.strategy_id if config else DEFAULT_STRATEGY_ID
+    start = config.start if config else DEFAULT_BACKTEST_START_TIME
+    end = config.end if config else DEFAULT_BACKTEST_END_TIME
+    initial_cash = config.initial_cash if config else DEFAULT_INITIAL_CASH
+    commission_ratio = config.commission_ratio if config else DEFAULT_COMMISSION_RATIO
+    slippage_ratio = config.slippage_ratio if config else DEFAULT_SLIPPAGE_RATIO
 
     run(
-        strategy_id=DEFAULT_STRATEGY_ID,
+        strategy_id=strategy_id,
         filename="main.py",
         mode=MODE_BACKTEST,
-        token=token,
-        backtest_start_time=DEFAULT_BACKTEST_START_TIME,
-        backtest_end_time=DEFAULT_BACKTEST_END_TIME,
+        token=DEFAULT_GM_TOKEN,
+        backtest_start_time=start,
+        backtest_end_time=end,
         backtest_adjust=ADJUST_PREV,
-        backtest_initial_cash=DEFAULT_INITIAL_CASH,
-        backtest_commission_ratio=DEFAULT_COMMISSION_RATIO,
-        backtest_slippage_ratio=DEFAULT_SLIPPAGE_RATIO,
+        backtest_initial_cash=initial_cash,
+        backtest_commission_ratio=commission_ratio,
+        backtest_slippage_ratio=slippage_ratio,
     )
 
 
-# =============================================================================
-# 日志 / 参数 / 主入口
-# =============================================================================
-
 def init_logger() -> None:
-    """
-    初始化全局日志。
-    """
     init_global_logger(
         app_name="quant",
         log_dir="logs",
@@ -330,38 +416,54 @@ def init_logger() -> None:
     )
 
 
-def parse_args() -> argparse.Namespace:
-    """
-    解析命令行参数。
-    """
-    parser = argparse.ArgumentParser(description="Run quant modules with GM or database data.")
-
-    parser.add_argument("--db", help="sqlite database file path for bar replay")
-    parser.add_argument("--frequency", default=DEFAULT_FREQUENCY, help="bar frequency")
-    parser.add_argument("--symbols", help="symbols, comma separated")
-    parser.add_argument("--start", help="start datetime, example: 2026-03-01 09:30:00")
-    parser.add_argument("--end", help="end datetime, example: 2026-03-31 15:00:00")
-
-    return parser.parse_args()
-
-
-def main() -> None:
-
-    init_logger()
-
-    args = parse_args()
-
-    if args.db:
-        run_db_replay(
-            db_path=args.db,
-            frequency=args.frequency,
-            symbols=args.symbols,
-            start=args.start,
-            end=args.end,
+def run_from_config(config: RuntimeConfig) -> None:
+    if config.mode == RunMode.GM_LOCAL:
+        setting = config.gm_local
+        assert setting is not None
+        run_gm_local_replay(
+            symbols=setting.symbols,
+            frequency=setting.frequency,
+            start=setting.start,
+            end=setting.end,
+            count=setting.count,
         )
         return
 
-    run_gm_backtest()
+    if config.mode == RunMode.GM_SQLITE:
+        setting = config.gm_sqlite
+        assert setting is not None
+        run_gm_sqlite_replay(setting)
+        return
+
+    if config.mode == RunMode.GM_SQLITE_BATCH:
+        setting = config.gm_sqlite_batch
+        assert setting is not None
+        run_gm_sqlite_batch(setting)
+        return
+
+    if config.mode == RunMode.DATABASE:
+        setting = config.database
+        assert setting is not None
+        run_db_replay(
+            db_path=setting.path,
+            frequency=setting.frequency,
+            symbols=setting.symbols,
+            start=setting.start,
+            end=setting.end,
+        )
+        return
+
+    run_gm_backtest(config.gm_backtest)
+
+
+def main() -> None:
+    init_logger()
+    config = load_runtime_config(DEFAULT_RUNTIME_CONFIG)
+    print(
+        f"[main] runtime config={DEFAULT_RUNTIME_CONFIG}, mode={config.mode.value}",
+        flush=True,
+    )
+    run_from_config(config)
 
 
 if __name__ == "__main__":

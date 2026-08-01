@@ -1,5 +1,5 @@
 from typing import Optional
-from vnpy.datafeed.BarCache import BarCache
+from vnpy.datafeed.bar_cache import BarCache
 from ..volatility import VolatilityFactor, VolatilityResult
 from ..volume import VolumeFactorResult, VolumeFactor
 from ..momentum import MomentumResult, MomentumFactor

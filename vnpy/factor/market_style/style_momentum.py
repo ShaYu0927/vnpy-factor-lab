@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from typing import Any, Optional
-from vnpy.factor.core.factorEngine import Factor, FactorContext
+from vnpy.factor.core.factor_engine import Factor, FactorContext
 
 
 @dataclass
@@ -160,6 +160,7 @@ class StyleMomentumEngineFactor(Factor):
         self.window = window
         self.name = f"style_momentum_{window}"
         self.min_bars = window + 1
+        self.primary_field = "style_momentum"
         self.factor = StyleMomentumFactor(
             window=window,
             strong_threshold=strong_threshold,

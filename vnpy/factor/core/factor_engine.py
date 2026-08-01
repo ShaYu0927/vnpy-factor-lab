@@ -1,17 +1,20 @@
 from __future__ import annotations
 
+import math
 import os
 import time
 import traceback
 from abc import ABC, abstractmethod
 from concurrent.futures import Executor, Future, ProcessPoolExecutor, ThreadPoolExecutor, as_completed
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, is_dataclass
 from enum import Enum
+from numbers import Real
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 from vnpy.common.logger import get_logger
 
 
 logger = get_logger("factor.engine")
+
 
 class ExecutionMode(str, Enum):
     """
@@ -46,7 +49,29 @@ class FactorContext:
 
     trade_date: Optional[str] = None
     params: Mapping[str, Any] = field(default_factory=dict)
-    
+
+
+class FactorStatus(str, Enum):
+    """Calculation status of one normalized factor value."""
+
+    READY = "ready"
+    INSUFFICIENT = "insufficient"
+    INVALID = "invalid"
+
+
+FactorFieldValue = int | float | str | bool | None
+
+
+@dataclass(frozen=True, slots=True)
+class FactorOutput:
+    """Canonical output returned directly by new factor implementations."""
+
+    value: float | None
+    fields: Mapping[str, FactorFieldValue] = field(default_factory=dict)
+    status: FactorStatus = FactorStatus.READY
+    reason: str = ""
+
+
 @dataclass(slots=True)
 class FactorValue:
     """
@@ -54,10 +79,41 @@ class FactorValue:
     """
     symbol: str
     factor_name: str
-    value: Any
+    value: float | None
     trade_date: Optional[str] = None
-    extra: Dict[str, Any] = field(default_factory=dict)
-    
+    primary_field: Optional[str] = None
+    status: FactorStatus = FactorStatus.READY
+    fields: Dict[str, FactorFieldValue] = field(default_factory=dict)
+    reason: str = ""
+    version: str = "1"
+    raw_value: Any = field(default=None, repr=False, compare=False)
+    extra: Dict[str, FactorFieldValue] = field(default_factory=dict, repr=False)
+
+    def __post_init__(self) -> None:
+        """Merge the deprecated ``extra`` input into canonical ``fields``."""
+        if self.extra:
+            self.fields = {**self.extra, **self.fields}
+        self.extra = self.fields
+
+    @property
+    def is_ready(self) -> bool:
+        return self.status == FactorStatus.READY and self.value is not None
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Return a stable, serialization-safe representation."""
+        return {
+            "symbol": self.symbol,
+            "factor_name": self.factor_name,
+            "trade_date": self.trade_date,
+            "value": self.value,
+            "primary_field": self.primary_field,
+            "status": self.status.value,
+            "fields": dict(self.fields),
+            "reason": self.reason,
+            "version": self.version,
+        }
+
+
 @dataclass(slots=True)
 class FactorError:
     """
@@ -81,6 +137,32 @@ class FactorBatchResult:
     @property
     def ok(self) -> bool:
         return not self.errors
+
+    def get(self, symbol: str, factor_name: str) -> Optional[FactorValue]:
+        """Return one factor value by its stable composite key."""
+        for value in self.values:
+            if value.symbol == symbol and value.factor_name == factor_name:
+                return value
+        return None
+
+    def for_symbol(self, symbol: str) -> Dict[str, FactorValue]:
+        """Return all factor values for one symbol, keyed by factor name."""
+        return {
+            value.factor_name: value
+            for value in self.values
+            if value.symbol == symbol
+        }
+
+    def scalar_map(self, symbol: str) -> Dict[str, float | None]:
+        """Return the normalized scalar feature vector for one symbol."""
+        return {
+            factor_name: value.value
+            for factor_name, value in self.for_symbol(symbol).items()
+        }
+
+    def to_records(self) -> List[Dict[str, Any]]:
+        """Return values as serialization-safe row records."""
+        return [value.to_dict() for value in self.values]
     
 class Factor(ABC):
     """
@@ -94,6 +176,7 @@ class Factor(ABC):
 
     name: str = "base_factor"
     min_bars: int = 1
+    primary_field: Optional[str] = None
 
     @abstractmethod
     def calculate(self, symbol: str, data: Any, context: FactorContext) -> Any:
@@ -106,7 +189,8 @@ class Factor(ABC):
             context: Runtime context.
 
         Returns:
-            Raw factor value. The engine will wrap it as FactorValue.
+            A scalar, FactorOutput, or legacy result object. The engine
+            normalizes every supported return type into FactorValue.
         """
 
         raise NotImplementedError
@@ -183,8 +267,8 @@ class FactorEngine:
         self._check_factor_names()
         self._executor: Optional[Executor] = None
         if self._config.mode == ExecutionMode.THREAD:
-            self._executor = ThreadPoolExecutor(max_workers=self._config.resolved_workers(), thread_name_prefix="factor-worker",)
-        
+            self._executor = self._create_executor()
+
 
     @property
     def factors(self) -> Tuple[Factor, ...]:
@@ -199,7 +283,7 @@ class FactorEngine:
         Calculate all factors for one symbol.
         """
         return self.calculate_many({symbol: data}, context=context)
-    
+
     def calculate_many(self, symbol_data_map: Mapping[str, Any], context: Optional[FactorContext] = None, ) -> FactorBatchResult:
         """
         Calculate all configured factors for many symbols.
@@ -217,7 +301,7 @@ class FactorEngine:
         start = time.perf_counter()
         ctx = context or FactorContext()
         tasks = self._build_tasks(symbol_data_map, ctx)
-    
+
 
         if self._config.mode == ExecutionMode.SYNC:
             result = self._run_sync(tasks)
@@ -226,7 +310,7 @@ class FactorEngine:
 
         result.elapsed_ms = (time.perf_counter() - start) * 1000.0
         return result
-    
+
     def calculate_factor_cross_section(self, factor_name: str, symbol_data_map: Mapping[str, Any], context: Optional[FactorContext] = None,) -> FactorBatchResult:
         """
         Calculate one specific factor across many symbols.
@@ -243,7 +327,7 @@ class FactorEngine:
             chunk_size=self._config.chunk_size,
         )
         return engine.calculate_many(symbol_data_map, context=context)
-    
+
     def _check_factor_names(self) -> None:
         seen = set()
         for factor in self._factors:
@@ -252,13 +336,13 @@ class FactorEngine:
             if factor.name in seen:
                 raise ValueError(f"duplicate factor name: {factor.name}")
             seen.add(factor.name)
-            
+
     def _get_factor(self, factor_name: str) -> Factor:
         for factor in self._factors:
             if factor.name == factor_name:
                 return factor
         raise KeyError(f"factor not found: {factor_name}")
-    
+
     def _build_tasks(self, symbol_data_map: Mapping[str, Any], context: FactorContext,) -> List[FactorTask]:
         tasks: List[FactorTask] = []
 
@@ -277,7 +361,7 @@ class FactorEngine:
                 )
 
         return tasks
-    
+
     def _run_sync(self, tasks: Sequence[FactorTask]) -> FactorBatchResult:
         values: List[FactorValue] = []
         errors: List[FactorError] = []
@@ -300,11 +384,7 @@ class FactorEngine:
         if not tasks:
             return FactorBatchResult()
 
-        if self._executor is None:
-            executor_cls = self._select_executor()
-            self._executor = executor_cls(max_workers=self._config.resolved_workers())
-
-        futures = self._submit_tasks(self._executor, tasks)
+        futures = self._submit_tasks_with_recovery(tasks)
 
         for future in as_completed(futures):
             value, error = future.result()
@@ -319,6 +399,31 @@ class FactorEngine:
 
         return FactorBatchResult(values=values, errors=errors)
 
+    def _submit_tasks_with_recovery(self, tasks: Sequence[FactorTask]) -> List[Future]:
+        executor = self._ensure_executor()
+
+        try:
+            return self._submit_tasks(executor, tasks)
+        except RuntimeError as exc:
+            message = str(exc)
+            if "interpreter shutdown" in message:
+                logger.warning("skip factor tasks because interpreter is shutting down")
+                return []
+
+            if "shutdown" not in message:
+                raise
+
+            logger.warning("factor executor was shutdown unexpectedly, recreating it")
+            self._executor = None
+            executor = self._ensure_executor()
+            return self._submit_tasks(executor, tasks)
+
+    def _ensure_executor(self) -> Executor:
+        if self._executor is None:
+            self._executor = self._create_executor()
+
+        return self._executor
+
     def _submit_tasks(self, executor: Executor, tasks: Sequence[FactorTask],) -> List[Future]:
         return [executor.submit(_execute_factor_task, task) for task in tasks]
 
@@ -326,7 +431,7 @@ class FactorEngine:
         for future in futures:
             if not future.done():
                 future.cancel()
-                    
+
     def _select_executor(self):
         if self._config.mode == ExecutionMode.THREAD:
             return ThreadPoolExecutor
@@ -335,39 +440,167 @@ class FactorEngine:
             return ProcessPoolExecutor
 
         raise ValueError(f"unsupported execution mode: {self._config.mode}")
-    
+
+    def _create_executor(self) -> Executor:
+        if self._config.mode == ExecutionMode.THREAD:
+            return ThreadPoolExecutor(
+                max_workers=self._config.resolved_workers(),
+                thread_name_prefix="factor-worker",
+            )
+
+        executor_cls = self._select_executor()
+        return executor_cls(max_workers=self._config.resolved_workers())
 
 def _execute_factor_task(task: FactorTask) -> Tuple[Optional[FactorValue], Optional[FactorError]]:
-        """
-        Top-level worker function.
+    """
+    Top-level worker function.
 
-        It must stay at module top level so ProcessPoolExecutor can pickle it.
-        """
+    It must stay at module top level so ProcessPoolExecutor can pickle it.
+    """
 
-        factor = task.factor
-        symbol = task.symbol
-        
-        logger.info("start factor symbol=%s factor=%s", task.symbol, task.factor.name,)
+    factor = task.factor
+    symbol = task.symbol
 
-        try:
-            raw_value = factor.calculate(symbol=symbol, data=task.data, context=task.context)
-            return (
-                FactorValue(
-                    symbol=symbol,
-                    factor_name=factor.name,
-                    value=raw_value,
-                    trade_date=task.context.trade_date,
-                ),
-                None,
-            )
-        except Exception as exc: 
-            return (
-                None,
-                FactorError(
-                    symbol=symbol,
-                    factor_name=factor.name,
-                    error=str(exc),
-                    traceback_text=traceback.format_exc(),
-                ),
-            )
-    
+    try:
+        raw_value = factor.calculate(symbol=symbol, data=task.data, context=task.context)
+        return (
+            _normalize_factor_value(
+                symbol=symbol,
+                factor=factor,
+                raw_value=raw_value,
+                trade_date=task.context.trade_date,
+            ),
+            None,
+        )
+    except Exception as exc:
+        return (
+            None,
+            FactorError(
+                symbol=symbol,
+                factor_name=factor.name,
+                error=str(exc),
+                traceback_text=traceback.format_exc(),
+            ),
+        )
+
+
+def _normalize_factor_value(
+    symbol: str,
+    factor: Factor,
+    raw_value: Any,
+    trade_date: Optional[str],
+) -> FactorValue:
+    """Normalize scalar, canonical, and legacy factor outputs."""
+    if isinstance(raw_value, FactorOutput):
+        value = _normalize_number(raw_value.value)
+        status = raw_value.status
+        reason = raw_value.reason
+        fields = _normalize_fields(raw_value.fields)
+
+        if status == FactorStatus.READY and value is None:
+            status = FactorStatus.INVALID
+            reason = reason or "ready factor output must contain a finite value"
+
+        return FactorValue(
+            symbol=symbol,
+            factor_name=factor.name,
+            value=value,
+            trade_date=trade_date,
+            primary_field=factor.primary_field,
+            status=status,
+            fields=fields,
+            reason=reason,
+            raw_value=raw_value,
+        )
+
+    if raw_value is None:
+        return FactorValue(
+            symbol=symbol,
+            factor_name=factor.name,
+            value=None,
+            trade_date=trade_date,
+            primary_field=factor.primary_field,
+            status=FactorStatus.INSUFFICIENT,
+            reason="factor returned no value",
+        )
+
+    if isinstance(raw_value, Real):
+        value = _normalize_number(raw_value)
+        status = FactorStatus.READY if value is not None else FactorStatus.INVALID
+        return FactorValue(
+            symbol=symbol,
+            factor_name=factor.name,
+            value=value,
+            trade_date=trade_date,
+            primary_field=factor.primary_field,
+            status=status,
+            reason="" if value is not None else "factor returned a non-finite value",
+            raw_value=raw_value,
+        )
+
+    primary_field = factor.primary_field
+    if not primary_field:
+        raise TypeError(
+            f"factor {factor.name!r} returned {type(raw_value).__name__}; "
+            "set factor.primary_field or return FactorOutput"
+        )
+
+    if is_dataclass(raw_value) and not isinstance(raw_value, type):
+        raw_fields = asdict(raw_value)
+    elif isinstance(raw_value, Mapping):
+        raw_fields = dict(raw_value)
+    else:
+        raw_fields = vars(raw_value)
+
+    value = _normalize_number(raw_fields.get(primary_field))
+    reason = str(raw_fields.get("reason") or "")
+    status = FactorStatus.READY
+    if value is None:
+        status = FactorStatus.INVALID
+        reason = reason or f"primary field {primary_field!r} is missing or non-finite"
+
+    excluded_fields = {"symbol", "reason", primary_field}
+    fields = _normalize_fields({
+        key: item
+        for key, item in raw_fields.items()
+        if key not in excluded_fields
+    })
+
+    return FactorValue(
+        symbol=symbol,
+        factor_name=factor.name,
+        value=value,
+        trade_date=trade_date,
+        primary_field=primary_field,
+        status=status,
+        fields=fields,
+        reason=reason,
+        raw_value=raw_value,
+    )
+
+
+def _normalize_number(value: Any) -> Optional[float]:
+    if not isinstance(value, Real):
+        return None
+
+    number = float(value)
+    if not math.isfinite(number):
+        return None
+    return number
+
+
+def _normalize_fields(values: Mapping[str, Any]) -> Dict[str, FactorFieldValue]:
+    fields: Dict[str, FactorFieldValue] = {}
+
+    for key, value in values.items():
+        if not isinstance(key, str):
+            continue
+        if isinstance(value, Enum):
+            fields[key] = str(value.value)
+        elif value is None or isinstance(value, (str, bool, int)):
+            fields[key] = value
+        elif isinstance(value, Real):
+            number = float(value)
+            fields[key] = number if math.isfinite(number) else None
+
+    return fields

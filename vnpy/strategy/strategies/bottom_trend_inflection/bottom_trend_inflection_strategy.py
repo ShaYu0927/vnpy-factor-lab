@@ -3,12 +3,12 @@ from __future__ import annotations
 from collections import defaultdict, deque
 from typing import Any, DefaultDict, Deque
 
-from vnpy.strategy.StratContext import (
+from vnpy.strategy.strategy_context import (
     SignalDirection,
     StrategyContext,
     StrategySignal,
 )
-from vnpy.strategy.StratTemplate import StrategyOutput, StrategyTemplate
+from vnpy.strategy.strategy_template import StrategyOutput, StrategyTemplate
 
 
 class BottomTrendInflectionStrategy(StrategyTemplate):
