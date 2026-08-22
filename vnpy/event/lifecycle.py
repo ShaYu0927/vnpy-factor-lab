@@ -52,8 +52,6 @@ class ModuleLifecycle:
 
         self._registry.for_each(_start)
 
-        print("[ModuleLifecycle] start all modules")
-
     def stop_all(self) -> None:
         """
         停止所有模块
@@ -63,8 +61,6 @@ class ModuleLifecycle:
             node.stop()
 
         self._registry.for_each(_stop)
-
-        print("[ModuleLifecycle] stop all modules")
 
     def is_module_started(self, name: str) -> bool:
         """

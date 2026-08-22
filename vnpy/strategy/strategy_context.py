@@ -48,6 +48,17 @@ class TargetPosition:
     score: float = 0.0
     reason: str = ""
     extra: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class OrderRequest:
+    """Order intent emitted by the strategy layer."""
+
+    vt_symbol: str
+    direction: str
+    price: float
+    volume: int
+    reason: str = ""
     
 @dataclass(slots=True)
 class StrategyContext:

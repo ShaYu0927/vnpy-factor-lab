@@ -35,4 +35,5 @@ logs/
 .venv/
 venv/
 env/
+web/
 *.md

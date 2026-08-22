@@ -1,4 +1,5 @@
 from .template import AlphaDataset
+from .loader import QlibDataLoader, translate_qlib_expression
 from .utility import Segment, to_datetime
 from .processor import (
     process_drop_na,
@@ -11,6 +12,8 @@ from .processor import (
 
 __all__ = [
     "AlphaDataset",
+    "QlibDataLoader",
+    "translate_qlib_expression",
     "Segment",
     "to_datetime",
     "process_drop_na",

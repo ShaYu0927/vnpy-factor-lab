@@ -133,10 +133,15 @@ def calculate_by_expression(df: pl.DataFrame, expression: str) -> pl.DataFrame:
         cs_sum,
         cs_scale
     )
-    from .ta_function import (              # noqa
-        ta_rsi,
-        ta_atr
-    )
+    try:
+        from .ta_function import (          # noqa
+            ta_rsi,
+            ta_atr
+        )
+    except ModuleNotFoundError as exc:
+        # TA-Lib is optional for expressions that do not use TA operators.
+        if exc.name != "talib":
+            raise
     from .math_function import (              # noqa
         less, greater, log, abs,
         sign, pow1, pow2,

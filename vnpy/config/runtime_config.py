@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 import os
 from pathlib import Path
@@ -85,6 +85,18 @@ class GmSqliteBatchConfig:
     overwrite: bool = False
     resume: bool = False
     progress_every_dates: int = 20
+    train_model: bool = False
+    label_horizon: int = 5
+    model_output: str | None = None
+    signal_output: str | None = None
+    evaluate_factors: bool = False
+    factor_quantiles: int = 2
+    min_abs_ic: float = 0.02
+    min_abs_ic_ir: float = 0.20
+    chart_output: str | None = None
+    chart_data_output: str | None = None
+    chart_bars: int = 120
+    open_chart: bool = False
 
 
 @dataclass(frozen=True)
@@ -118,7 +130,7 @@ class RuntimeConfig:
 
 
 def load_runtime_config(path: str | Path) -> RuntimeConfig:
-    config_path = Path(path)
+    config_path = Path(path).expanduser().resolve()
     if not config_path.is_file():
         raise FileNotFoundError(f"runtime config not found: {config_path.resolve()}")
 
@@ -176,6 +188,54 @@ def load_runtime_config(path: str | Path) -> RuntimeConfig:
                 raise ValueError(
                     "gm_sqlite_batch progress_every_dates must be greater than zero"
                 )
+            if batch.label_horizon <= 0:
+                raise ValueError(
+                    "gm_sqlite_batch label_horizon must be greater than zero"
+                )
+            if batch.factor_quantiles < 2:
+                raise ValueError(
+                    "gm_sqlite_batch factor_quantiles must be at least 2"
+                )
+            if batch.min_abs_ic < 0 or batch.min_abs_ic_ir < 0:
+                raise ValueError(
+                    "gm_sqlite_batch factor selection thresholds must not be negative"
+                )
+            if batch.train_model and batch.resume:
+                raise ValueError(
+                    "gm_sqlite_batch model training does not support resume"
+                )
+            if batch.chart_bars <= 0:
+                raise ValueError("gm_sqlite_batch chart_bars must be greater than zero")
+            project_root = (
+                config_path.parent.parent
+                if config_path.parent.name == "config"
+                else config_path.parent
+            )
+            output = _resolve_config_output(batch.output, project_root)
+            model_output = _resolve_optional_config_output(
+                batch.model_output,
+                project_root,
+            )
+            signal_output = _resolve_optional_config_output(
+                batch.signal_output,
+                project_root,
+            )
+            chart_output = _resolve_optional_config_output(
+                batch.chart_output,
+                project_root,
+            )
+            chart_data_output = _resolve_optional_config_output(
+                batch.chart_data_output,
+                project_root,
+            )
+            batch = replace(
+                batch,
+                output=output,
+                model_output=model_output,
+                signal_output=signal_output,
+                chart_output=chart_output,
+                chart_data_output=chart_data_output,
+            )
             return RuntimeConfig(
                 mode=mode,
                 gm_sqlite_batch=batch,
@@ -196,3 +256,17 @@ def load_runtime_config(path: str | Path) -> RuntimeConfig:
         )
     except TypeError as exc:
         raise ValueError(f"invalid '{mode.value}' configuration: {exc}") from exc
+
+
+def _resolve_config_output(value: str, base: Path) -> str:
+    """Resolve file outputs independently of the process working directory."""
+    if value.strip().lower() in {"console", ":console:"}:
+        return value
+    path = Path(value).expanduser()
+    return str(path.resolve() if path.is_absolute() else (base / path).resolve())
+
+
+def _resolve_optional_config_output(value: str | None, base: Path) -> str | None:
+    if value is None:
+        return None
+    return _resolve_config_output(value, base)

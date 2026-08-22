@@ -57,7 +57,7 @@ def register_factor_module(frequency: str) -> None:
             "mode": DEFAULT_FACTOR_MODE,
             "max_workers": DEFAULT_FACTOR_MAX_WORKERS,
             "strategy_module": "strategy",
-            "enable_print": True,
+            "enable_print": False,
             "print_every": 20,
         },
     )
@@ -120,23 +120,14 @@ def init(context) -> None:
         fallback_days=DEFAULT_SUBSCRIPTION_FALLBACK_DAYS,
     )
     symbol_list = pool.symbols()
-
     symbol_list = symbol_list[:5]
 
     if not symbol_list:
-        print(
-            "[main.init] subscribe skipped: stock pool is empty",
-            flush=True,
-        )
         return
 
     symbols = ",".join(symbol_list)
 
-    print(f"[main.init] subscribe symbols count={len(symbol_list)}, " f"symbols={symbols}", flush=True,)
-
     subscribe(symbols=symbols, frequency=DEFAULT_FREQUENCY, count=30,)
-
-    print("[main.init] subscribe called", flush=True)
 
 
 def on_bar(context, bars) -> None:
@@ -177,7 +168,6 @@ def wait_module_idle(name: str) -> None:
     node = module_engine.get_module(name)
     if node is None:
         return
-
     node._queue.join()
 
 def run_db_replay(db_path: str | Path, frequency: str = DEFAULT_FREQUENCY, symbols: Optional[str] = None, start: Optional[str] = None, end: Optional[str] = None,) -> None:
@@ -189,23 +179,11 @@ def run_db_replay(db_path: str | Path, frequency: str = DEFAULT_FREQUENCY, symbo
 
     try:
         sql, params = build_bar_query(frequency=frequency, symbols=symbol_list, start=start, end=end,)
-        print(f"[DB] query sql={sql}", flush=True)
-        print(f"[DB] query params={params}", flush=True)
-
         count = 0
 
         for row in conn.execute(sql, params):
             bar = row_to_bar(row)
             post_bar(bar, source=BarSource.SQLITE.value)
-
-            count += 1
-
-            if count % 1000 == 0:
-                print(
-                    f"[DB] replaying, count={count}, "
-                    f"last_symbol={bar.symbol}, last_bob={bar.bob}",
-                    flush=True,
-                )
 
         wait_module_idle("factor")
         wait_module_idle("strategy")
@@ -249,12 +227,6 @@ def run_gm_local_replay(
     try:
         for index, bar in enumerate(bars, start=1):
             post_bar(bar, source=BarSource.GM_LOCAL.value)
-            if index % 1000 == 0:
-                print(
-                    f"[GM local] replaying, count={index}, "
-                    f"last_symbol={bar.symbol}, last_bob={bar.bob}",
-                    flush=True,
-                )
 
         wait_module_idle("factor")
         wait_module_idle("strategy")
@@ -271,12 +243,6 @@ def run_gm_sqlite_replay(config: GmSqliteConfig) -> None:
     last_bar: BarData | None = None
     symbol_set: set[str] = set()
     count = 0
-
-    print(
-        f"[GM sqlite] root={feed.day_bar_dir} markets={config.markets} "
-        f"range={config.start} -> {config.end} frequency={config.frequency}",
-        flush=True,
-    )
 
     try:
         bars = feed.iter_history(
@@ -300,29 +266,15 @@ def run_gm_sqlite_replay(config: GmSqliteConfig) -> None:
             first_bar = first_bar or bar
             last_bar = bar
             symbol_set.add(bar.symbol)
-            if count % config.progress_every == 0:
-                print(
-                    f"[GM sqlite] replaying, count={count}, "
-                    f"symbols={len(symbol_set)}, last_symbol={bar.symbol}, "
-                    f"last_bob={bar.bob}",
-                    flush=True,
-                )
 
         wait_module_idle("factor")
         wait_module_idle("strategy")
-        print(
-            f"[GM sqlite] completed bars={count} symbols={len(symbol_set)} "
-            f"range={getattr(first_bar, 'bob', None)} -> "
-            f"{getattr(last_bar, 'bob', None)}",
-            flush=True,
-        )
     finally:
         module_engine.stop_all()
 
 
 def print_gm_local_summary(bars: List[BarData], frequency: str) -> None:
     if not bars:
-        print(f"[GM local] loaded bars=0 frequency={frequency}", flush=True)
         return
 
     counts = Counter(bar.symbol for bar in bars)
@@ -332,13 +284,6 @@ def print_gm_local_summary(bars: List[BarData], frequency: str) -> None:
     first_bob = min(bar.bob for bar in bars)
     last_bob = max(bar.bob for bar in bars)
 
-    print(
-        f"[GM local] loaded bars={len(bars)} "
-        f"symbols={len(counts)} frequency={frequency} "
-        f"range={first_bob} -> {last_bob} "
-        f"counts=[{symbol_counts}]",
-        flush=True,
-    )
 
 
 def parse_symbols(symbols: Optional[str]) -> List[str]:
@@ -411,7 +356,7 @@ def init_logger() -> None:
         level=20,
         max_bytes=20 * 1024 * 1024,
         backup_count=20,
-        enable_console=True,
+        enable_console=False,
         enable_file=True,
     )
 
@@ -420,13 +365,7 @@ def run_from_config(config: RuntimeConfig) -> None:
     if config.mode == RunMode.GM_LOCAL:
         setting = config.gm_local
         assert setting is not None
-        run_gm_local_replay(
-            symbols=setting.symbols,
-            frequency=setting.frequency,
-            start=setting.start,
-            end=setting.end,
-            count=setting.count,
-        )
+        run_gm_local_replay(symbols=setting.symbols, frequency=setting.frequency, start=setting.start, end=setting.end, count=setting.count,)
         return
 
     if config.mode == RunMode.GM_SQLITE:
@@ -444,13 +383,7 @@ def run_from_config(config: RuntimeConfig) -> None:
     if config.mode == RunMode.DATABASE:
         setting = config.database
         assert setting is not None
-        run_db_replay(
-            db_path=setting.path,
-            frequency=setting.frequency,
-            symbols=setting.symbols,
-            start=setting.start,
-            end=setting.end,
-        )
+        run_db_replay(db_path=setting.path, frequency=setting.frequency, symbols=setting.symbols, start=setting.start, end=setting.end,)
         return
 
     run_gm_backtest(config.gm_backtest)
@@ -459,10 +392,6 @@ def run_from_config(config: RuntimeConfig) -> None:
 def main() -> None:
     init_logger()
     config = load_runtime_config(DEFAULT_RUNTIME_CONFIG)
-    print(
-        f"[main] runtime config={DEFAULT_RUNTIME_CONFIG}, mode={config.mode.value}",
-        flush=True,
-    )
     run_from_config(config)
 
 

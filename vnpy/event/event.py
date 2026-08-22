@@ -38,6 +38,9 @@ class EventType(str, Enum):
 
     BAR = "bar"
     FACTOR = "factor"
+    MODEL_TRAIN_REQUEST = "model_train_request"
+    MODEL_TRAINED = "model_trained"
+    MODEL_FAILED = "model_failed"
     ALPHA_SIGNAL = "alpha_signal"
     TRADE_SIGNAL = "trade_signal"
     ORDER = "order"

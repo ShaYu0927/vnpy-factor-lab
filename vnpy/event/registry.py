@@ -8,7 +8,7 @@ class ModuleRegistry:
     """
     模块注册表。
 
-    只负责管理 ModuleNode：
+    只负责管理 ModuleNode
     1. 注册模块
     2. 删除模块
     3. 查找模块
@@ -42,7 +42,6 @@ class ModuleRegistry:
                 return False
 
             self._modules[node.name] = node
-            print(f"[ModuleRegistry] register module: {node.name}")
             return True
 
     def unregister(self, name: str) -> Optional[ModuleNode]:
@@ -63,7 +62,6 @@ class ModuleRegistry:
                 print(f"[ModuleRegistry] unregister failed: module not found: {name}")
                 return None
 
-            print(f"[ModuleRegistry] unregister module: {name}")
             return node
 
     def get(self, name: str) -> Optional[ModuleNode]:
@@ -110,4 +108,3 @@ class ModuleRegistry:
         """
         with self._lock:
             self._modules.clear()
-            print("[ModuleRegistry] clear all modules")

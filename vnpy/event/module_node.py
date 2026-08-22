@@ -62,7 +62,6 @@ class ModuleNode:
         启动模块线程
         """
         if self._thread and self._thread.is_alive():
-            print(f"[ModuleNode:{self.name}] already started")
             return True
 
         self._stop_event.clear()
@@ -72,7 +71,6 @@ class ModuleNode:
         self._thread.start()
         self._started = True
 
-        print(f"[ModuleNode:{self.name}] started")
         return True
 
     def stop(self) -> bool:
@@ -98,7 +96,6 @@ class ModuleNode:
 
         self._started = False
 
-        print(f"[ModuleNode:{self.name}] stopped")
         return True
 
     def post_event(self, event: EngineEvent) -> bool:

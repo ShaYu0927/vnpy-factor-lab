@@ -109,7 +109,7 @@ def init_global_logger(app_name: str = "quant", log_dir: str = "logs", level: in
         queue_handler.setLevel(level)
         logger.addHandler(queue_handler)
 
-        formatter = logging.Formatter(
+        file_formatter = logging.Formatter(
             fmt=(
                 "%(asctime)s.%(msecs)03d | "
                 "%(levelname)-8s | "
@@ -120,13 +120,17 @@ def init_global_logger(app_name: str = "quant", log_dir: str = "logs", level: in
             ),
             datefmt="%Y-%m-%d %H:%M:%S",
         )
+        console_formatter = logging.Formatter(
+            fmt="%(asctime)s | %(levelname)s | %(message)s",
+            datefmt="%H:%M:%S",
+        )
 
         handlers: list[logging.Handler] = []
 
         if enable_console:
             console_handler = logging.StreamHandler(sys.stdout)
             console_handler.setLevel(level)
-            console_handler.setFormatter(formatter)
+            console_handler.setFormatter(console_formatter)
             handlers.append(console_handler)
 
         if enable_file:
@@ -137,7 +141,7 @@ def init_global_logger(app_name: str = "quant", log_dir: str = "logs", level: in
                 backup_count=backup_count,
             )
             file_handler.setLevel(level)
-            file_handler.setFormatter(formatter)
+            file_handler.setFormatter(file_formatter)
             handlers.append(file_handler)
 
         _QUEUE_LISTENER = QueueListener(log_queue, *handlers, respect_handler_level=True,)

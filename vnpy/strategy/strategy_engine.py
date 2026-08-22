@@ -5,9 +5,12 @@ from importlib import import_module
 from typing import Any, Callable, DefaultDict, Iterable, Optional, Sequence
 
 from vnpy.event.event import EngineEvent, EventType
-from vnpy.risk.risk_context import OrderRequest
-from vnpy.risk.rules.rule import RiskAction
-from vnpy.strategy.strategy_context import StrategyContext, StrategySignal, TargetPosition
+from vnpy.strategy.strategy_context import (
+    OrderRequest,
+    StrategyContext,
+    StrategySignal,
+    TargetPosition,
+)
 from vnpy.strategy.strategy_template import StrategyOutput, StrategyTemplate
 
 
@@ -59,8 +62,6 @@ class StrategyEngine:
         source: str = "strategy",
         order_module: str = "order",
         trade_module: str | None = None,
-        risk_engine: Any = None,
-        risk_context: Any = None,
         strategy_context: StrategyContext | None = None,
     ) -> None:
         # 事件投递函数，由外部事件引擎传入。
@@ -79,9 +80,6 @@ class StrategyEngine:
 
         # 风控引擎和风控上下文。
         # 如果没有传入，则 send_order() 默认不做风控检查。
-        self.risk_engine = risk_engine
-        self.risk_context = risk_context
-
         # 策略共享上下文，里面通常放账户、持仓、行情缓存、参数、状态等信息。
         self.context = strategy_context or StrategyContext()
 

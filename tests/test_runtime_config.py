@@ -62,6 +62,9 @@ def test_load_gm_sqlite_batch_config(tmp_path) -> None:
     assert config.gm_sqlite_batch is not None
     assert config.gm_sqlite_batch.batch_size == 5000
     assert config.gm_sqlite_batch.max_workers == 8
+    assert config.gm_sqlite_batch.output == str(
+        (tmp_path / "data" / "factors.csv").resolve()
+    )
 
 
 def test_reject_invalid_gm_sqlite_batch_size(tmp_path) -> None:

@@ -43,8 +43,6 @@ class StrategyEngineModule(BaseModule):
             source=self.name,
             order_module=self.get_config("order_module", "order"),
             trade_module=self.get_config("trade_module"),
-            risk_engine=self.get_object("risk_engine"),
-            risk_context=self.get_object("risk_context"),
         )
         self.set_object("strategy_engine", engine)
         self._load_configured_strategies(engine)

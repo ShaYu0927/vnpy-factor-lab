@@ -185,3 +185,39 @@ def test_run_gm_sqlite_batch_resumes_without_duplicate_rows(tmp_path) -> None:
     assert summary.values_written == 6
     assert [row["trade_date"] for row in rows].count("2025-01-22") == 6
     assert [row["trade_date"] for row in rows].count("2025-01-23") == 6
+
+
+def test_run_gm_sqlite_batch_trains_model_and_writes_latest_signals(tmp_path) -> None:
+    day_bar = tmp_path / "basic_data" / "day_bar"
+    day_bar.mkdir(parents=True)
+    create_day_bar_database(day_bar / "SHSE_2025.dat", days=45)
+    signal_output = tmp_path / "latest_signals.csv"
+    model_output = tmp_path / "linear_model.pkl"
+
+    summary = run_gm_sqlite_batch(
+        GmSqliteBatchConfig(
+            root=str(tmp_path),
+            start="2025-01-01",
+            end="2025-02-14",
+            output="console",
+            markets="SHSE",
+            window_size=21,
+            factors=["momentum_20", "volatility_20", "volume_20"],
+            factor_mode="sync",
+            max_workers=1,
+            progress_every_dates=100,
+            train_model=True,
+            label_horizon=5,
+            model_output=str(model_output),
+            signal_output=str(signal_output),
+        )
+    )
+
+    with signal_output.open(encoding="utf-8", newline="") as file:
+        signals = list(csv.DictReader(file))
+
+    assert summary.model_training_samples > 0
+    assert summary.model_test_samples > 0
+    assert model_output.is_file()
+    assert len(signals) == 2
+    assert [row["rank"] for row in signals] == ["1", "2"]

@@ -9,6 +9,10 @@ __all__ = [
     "Segment",
     "to_datetime",
     "AlphaModel",
+    "BaseModel",
+    "FineTunableAlphaModel",
+    "Reweighter",
+    "ColumnReweighter",
     "AlphaStrategy",
     "BacktestingEngine",
     "AlphaLab"
@@ -25,10 +29,28 @@ def __getattr__(name: str) -> Any:
             "Segment": Segment,
             "to_datetime": to_datetime,
         }
-    elif name == "AlphaModel":
-        from .model import AlphaModel
+    elif name in {
+        "AlphaModel",
+        "BaseModel",
+        "FineTunableAlphaModel",
+        "Reweighter",
+        "ColumnReweighter",
+    }:
+        from .model import (
+            AlphaModel,
+            BaseModel,
+            ColumnReweighter,
+            FineTunableAlphaModel,
+            Reweighter,
+        )
 
-        values = {"AlphaModel": AlphaModel}
+        values = {
+            "AlphaModel": AlphaModel,
+            "BaseModel": BaseModel,
+            "FineTunableAlphaModel": FineTunableAlphaModel,
+            "Reweighter": Reweighter,
+            "ColumnReweighter": ColumnReweighter,
+        }
     elif name in {"AlphaStrategy", "BacktestingEngine"}:
         from .strategy import AlphaStrategy, BacktestingEngine
 

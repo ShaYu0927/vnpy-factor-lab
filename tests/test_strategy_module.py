@@ -148,3 +148,27 @@ def test_factor_event_only_dispatches_to_mapped_strategies() -> None:
     assert len(momentum_strategy.received) == 2
     assert len(volume_strategy.received) == 1
     assert len(complete_strategy.received) == 1
+
+
+def test_strategy_engine_emits_order_without_risk_package() -> None:
+    received = []
+    engine = StrategyEngine(
+        post_event=lambda target, event: received.append((target, event)) or True,
+    )
+    engine.add_strategy("recording", RecordingStrategy)
+    engine.start_strategy("recording")
+
+    accepted = engine.send_order(
+        strategy_name="recording",
+        symbol="SZSE.000001",
+        direction="long",
+        price=12.5,
+        volume=100,
+        reason="test",
+    )
+
+    assert accepted is True
+    assert received[0][0] == "order"
+    order = received[0][1].get("order")
+    assert order.vt_symbol == "SZSE.000001"
+    assert order.volume == 100
