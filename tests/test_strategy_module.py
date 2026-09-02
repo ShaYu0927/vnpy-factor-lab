@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from vnpy.event.engine import ModuleEngine
 from vnpy.event.event import EngineEvent, EventType
 from vnpy.factor.factor_engine import FactorBatchResult, FactorValue
@@ -11,21 +13,23 @@ from vnpy.strategy.strategy_template import StrategyTemplate
 def create_buy_sample() -> FactorSample:
     return FactorSample(
         symbol="SZSE.000001",
-        datetime="2026-05-25 10:01:00",
+        datetime=datetime(2026, 5, 25, 10, 1),
         close=12.5,
-        momentum=0.01,
-        strength=0.8,
-        trend="UP",
-        volatility=0.01,
-        latest_volume=2000,
-        volume_ma5=1000,
-        volume_ma10=900,
-        volume_ratio=2.0,
-        volume_change=1.0,
-        volume_level="HIGH_VOLUME",
-        price_volume_signal="PRICE_UP_VOLUME_UP",
-        momentum_reason="up",
-        volume_reason="active",
+        features={
+            "momentum": 0.01,
+            "strength": 0.8,
+            "trend": "UP",
+            "volatility": 0.01,
+            "latest_volume": 2000.0,
+            "volume_ma5": 1000.0,
+            "volume_ma10": 900.0,
+            "volume_ratio": 2.0,
+            "volume_change": 1.0,
+            "volume_level": "HIGH_VOLUME",
+            "price_volume_signal": "PRICE_UP_VOLUME_UP",
+            "momentum_reason": "up",
+            "volume_reason": "active",
+        },
     )
 
 

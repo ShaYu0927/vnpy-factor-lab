@@ -1,266 +1,113 @@
-from typing import Mapping, Optional, Sequence
+"""Realtime bridge from market bars into the unified Alpha engine."""
 
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Mapping, Sequence
+
+from vnpy.alpha.definition import AlphaDefinition
+from vnpy.alpha.engine import AlphaEngine, AlphaSample, AlphaSampleCache
 from vnpy.datafeed.bar_cache import BarCache
-from vnpy.factor.core.basic_factor import BasicFactorResult
-from vnpy.factor.core.factor_data_builder import (
-    BasicMomentumEngineFactor,
-    BasicVolatilityEngineFactor,
-    BasicVolumeEngineFactor,
-    IntradayFadeReversalFactor,
-    VolumePriceReversalFactor,
-)
-from vnpy.factor.core.factor_engine import (
-    ExecutionMode,
-    Factor,
-    FactorBatchResult,
-    FactorContext,
-    FactorEngine,
-)
-from vnpy.factor.core.factor_sample import FactorSample, FactorSampleBuilder, FastFactorSampleCache
+from vnpy.factor.core.factor_engine import FactorBatchResult, FactorValue
 
 
-class BasicFactorSet:
-    """
-    Factory for the default bar-based factors used by realtime calculation.
-    """
-
-    @staticmethod
-    def create() -> tuple[Factor, ...]:
-        return (
-            BasicMomentumEngineFactor(window=20),
-            BasicVolatilityEngineFactor(window=20),
-            BasicVolumeEngineFactor(window=20),
-            VolumePriceReversalFactor(window=20),
-            IntradayFadeReversalFactor(volume_window=20),
-        )
-
-
-class FactorBatchCalculator:
-    """
-    Thin batch/cross-section facade around FactorEngine.
-    """
-
-    def __init__(self, factor_engine: FactorEngine) -> None:
-        self.factor_engine = factor_engine
-
-    def calculate_many(self, symbol_data_map: Mapping[str, object], context: Optional[FactorContext] = None,) -> FactorBatchResult:
-        return self.factor_engine.calculate_many(symbol_data_map, context=context)
-
-    def calculate_cross_section(self, factor_name: str, symbol_data_map: Mapping[str, object], context: Optional[FactorContext] = None,) -> FactorBatchResult:
-        return self.factor_engine.calculate_factor_cross_section(
-            factor_name=factor_name,
-            symbol_data_map=symbol_data_map,
-            context=context,
-        )
-
-
-class CachedBarFactorCalculator:
-    """
-    Reads latest bars from BarCache and delegates factor calculation to FactorEngine.
-    """
-
-    def __init__(self, bar_cache: BarCache, factor_engine: FactorEngine, frequency: str, min_bars: int,) -> None:
-        self.bar_cache = bar_cache
-        self.factor_engine = factor_engine
-        self.frequency = frequency
-        self.min_bars = min_bars
-
-    def calculate_latest(self, bar, context: Optional[FactorContext] = None,) -> Optional[FactorBatchResult]:
-        history_bars = self.bar_cache.get_bars(symbol=bar.symbol, frequency=bar.frequency, count=self.min_bars,)
-        if len(history_bars) < self.min_bars:
-            return None
-
-        return self.factor_engine.calculate_one(
-            symbol=bar.symbol,
-            data=history_bars,
-            context=context or FactorContext(trade_date=str(getattr(bar, "bob", ""))),
-        )
-
-    def build_latest_data_map(self, symbols: Sequence[str], count: Optional[int] = None,) -> dict[str, object]:
-        required_count = count or self.min_bars
-        symbol_data_map: dict[str, object] = {}
-
-        for symbol in symbols:
-            bars = self.bar_cache.get_bars(
-                symbol=symbol,
-                frequency=self.frequency,
-                count=required_count,
-            )
-            if len(bars) >= required_count:
-                symbol_data_map[symbol] = bars
-
-        return symbol_data_map
-
-
-class FactorSampleAssembler:
-    """
-    Converts FactorEngine output into the strategy-facing FactorSample.
-    """
-
-    def build_sample(self, bar, batch_result: FactorBatchResult,) -> Optional[FactorSample]:
-        values = batch_result.for_symbol(bar.symbol)
-        momentum_result = self._find(values, "momentum_")
-        volatility_result = self._find(values, "volatility_")
-        volume_result = self._find(values, "volume_", excluded_prefix="volume_price_")
-
-        return FactorSampleBuilder.build(
-            bar=bar,
-            momentum_result=momentum_result,
-            volume_result=volume_result,
-            volatility_result=volatility_result,
-        )
-
-    @staticmethod
-    def _find(
-        values: Mapping[str, object],
-        prefix: str,
-        excluded_prefix: Optional[str] = None,
-    ) -> Optional[object]:
-        for factor_name, value in values.items():
-            if factor_name.startswith(prefix) and not (
-                excluded_prefix and factor_name.startswith(excluded_prefix)
-            ):
-                return value
-        return None
-
-    @staticmethod
-    def to_basic_result(symbol: str, batch_result: FactorBatchResult) -> BasicFactorResult:
-        result = BasicFactorResult(symbol=symbol)
-
-        for value in batch_result.values:
-            if value.factor_name.startswith("momentum_"):
-                result.momentum = value.raw_value
-            elif value.factor_name.startswith("volatility_"):
-                result.volatility = value.raw_value
-            elif value.factor_name.startswith("volume_") and not value.factor_name.startswith("volume_price_"):
-                result.volume = value.raw_value
-
-        return result
-
-
-class RealtimeFactorService:
-    """
-    Unified factor service for realtime and batch factor calculation.
-
-    Realtime:
-        on_bar() updates BarCache, calculates the latest symbol through FactorEngine
-        and returns a FactorSample for the strategy module.
-
-    Batch/cross-section:
-        calculate_many() and calculate_cross_section() expose the same FactorEngine
-        for offline multi-stock calculation.
-    """
+class RealtimeAlphaService:
+    """Calculate registered Alpha expressions from cached current/past bars."""
 
     def __init__(
         self,
         bar_cache: BarCache,
-        sample_cache: FastFactorSampleCache,
+        sample_cache: AlphaSampleCache,
+        definitions: Sequence[AlphaDefinition] = (),
         frequency: str = "60s",
-        factors: Optional[Sequence[Factor]] = None,
-        factor_engine: Optional[FactorEngine] = None,
-        mode: ExecutionMode = ExecutionMode.SYNC,
-        max_workers: Optional[int] = None,
-        batch_calculator: Optional[FactorBatchCalculator] = None,
-        cached_calculator: Optional[CachedBarFactorCalculator] = None,
-        sample_assembler: Optional[FactorSampleAssembler] = None,
+        universe: Sequence[str] | None = None,
+        alpha_engine: AlphaEngine | None = None,
+        **_legacy_options,
     ) -> None:
         self.bar_cache = bar_cache
         self.sample_cache = sample_cache
         self.frequency = frequency
-        self.factors = tuple(factors or BasicFactorSet.create())
-        self.factor_engine = factor_engine or FactorEngine(
-            factors=self.factors,
-            mode=mode,
-            max_workers=max_workers,
-        )
-        self.min_bars = max((getattr(factor, "min_bars", 1) for factor in self.factors), default=1)
-        self.batch_calculator = batch_calculator or FactorBatchCalculator(self.factor_engine)
-        self.cached_calculator = cached_calculator or CachedBarFactorCalculator(
-            bar_cache=self.bar_cache,
-            factor_engine=self.factor_engine,
-            frequency=self.frequency,
-            min_bars=self.min_bars,
-        )
-        self.sample_assembler = sample_assembler or FactorSampleAssembler()
+        self.definitions = tuple(definitions)
+        self.alpha_engine = alpha_engine or AlphaEngine(self.definitions)
+        self.universe = tuple(dict.fromkeys(universe or ()))
         self.latest_batch_result = FactorBatchResult()
 
-    def on_bar(self, bar) -> Optional[FactorSample]:
-        """
-        Update cache, calculate factors and return the latest realtime sample.
-        """
-
-        if bar is None:
+    def on_bar(self, bar) -> AlphaSample | None:
+        if bar is None or not self.definitions:
             return None
-
         if not getattr(bar, "frequency", None):
             bar.frequency = self.frequency
-
         self.bar_cache.update(bar)
-
-        batch_result = self.cached_calculator.calculate_latest(bar)
-        if batch_result is None:
+        at = _bar_datetime(bar)
+        symbols = self.universe or tuple(self.bar_cache.symbols())
+        bars_by_symbol = {
+            symbol: self.bar_cache.get_bars(
+                symbol=symbol,
+                frequency=self.frequency,
+                count=self.alpha_engine.min_bars,
+            )
+            for symbol in symbols
+        }
+        bars_by_symbol = {symbol: bars for symbol, bars in bars_by_symbol.items() if len(bars) >= self.alpha_engine.min_bars}
+        if not bars_by_symbol:
             return None
 
-        self.latest_batch_result = batch_result
-        sample = self.sample_assembler.build_sample(bar, batch_result)
+        if self.alpha_engine.requires_cross_section:
+            if not self.universe or len(bars_by_symbol) != len(self.universe):
+                return None
+            if any(_bar_datetime(bars[-1]) != at for bars in bars_by_symbol.values()):
+                return None
 
-        if sample is None:
-            return None
-
-        self.sample_cache.add(sample)
-        return sample
-
-    def calculate_many(
-        self,
-        symbol_data_map: Mapping[str, object],
-        context: Optional[FactorContext] = None,
-    ) -> FactorBatchResult:
-        """
-        Calculate all configured factors for many symbols.
-
-        This is the batch/multi-stock entry point for offline jobs or
-        cross-sectional strategy preparation.
-        """
-
-        return self.batch_calculator.calculate_many(symbol_data_map, context=context)
-
-    def calculate_cross_section(
-        self,
-        factor_name: str,
-        symbol_data_map: Mapping[str, object],
-        context: Optional[FactorContext] = None,
-    ) -> FactorBatchResult:
-        """
-        Calculate one factor across many symbols.
-        """
-
-        return self.batch_calculator.calculate_cross_section(
-            factor_name=factor_name,
-            symbol_data_map=symbol_data_map,
-            context=context,
-        )
+        frame = self.alpha_engine.from_bars(bars_by_symbol)
+        samples = self.alpha_engine.calculate_latest(frame, at=at)
+        self.latest_batch_result = _to_factor_result(samples)
+        for sample in samples:
+            self.sample_cache.add(sample)
+        return next((sample for sample in samples if sample.symbol == bar.symbol), None)
 
     def calculate_latest_cross_section(
         self,
         symbols: Sequence[str],
-        factor_name: Optional[str] = None,
-        count: Optional[int] = None,
-        context: Optional[FactorContext] = None,
-    ) -> FactorBatchResult:
-        """
-        Calculate factors from the latest cached bars of many symbols.
-        """
+        at: datetime | None = None,
+        count: int | None = None,
+        **_legacy_options,
+    ) -> list[AlphaSample]:
+        required = count or self.alpha_engine.min_bars
+        bars = {
+            symbol: self.bar_cache.get_bars(symbol=symbol, frequency=self.frequency, count=required)
+            for symbol in symbols
+        }
+        frame = self.alpha_engine.from_bars({key: value for key, value in bars.items() if value})
+        return self.alpha_engine.calculate_latest(frame, at=at)
 
-        symbol_data_map = self.cached_calculator.build_latest_data_map(
-            symbols=symbols,
-            count=count,
+    def calculate(self, frame) -> object:
+        """Expose the same expression engine to offline callers."""
+        return self.alpha_engine.calculate(frame)
+
+
+def _bar_datetime(bar) -> datetime:
+    value = getattr(bar, "datetime", None) or getattr(bar, "bob", None) or getattr(bar, "eob", None)
+    if not isinstance(value, datetime):
+        raise ValueError("bar must contain a datetime/bob/eob datetime")
+    return value
+
+
+def _to_factor_result(samples: Sequence[AlphaSample]) -> FactorBatchResult:
+    values = [
+        FactorValue(
+            symbol=sample.symbol,
+            factor_name=name,
+            value=value,
+            trade_date=sample.datetime.isoformat(),
+            primary_field="value",
         )
+        for sample in samples
+        for name, value in sample.features.items()
+    ]
+    return FactorBatchResult(values=values)
 
-        if factor_name:
-            return self.calculate_cross_section(
-                factor_name=factor_name,
-                symbol_data_map=symbol_data_map,
-                context=context,
-            )
 
-        return self.calculate_many(symbol_data_map, context=context)
+# Keep the former import path working while routing it through Alpha.
+RealtimeFactorService = RealtimeAlphaService
+
+__all__ = ["RealtimeAlphaService", "RealtimeFactorService"]

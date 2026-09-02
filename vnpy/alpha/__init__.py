@@ -5,6 +5,10 @@ from .logger import logger
 
 __all__ = [
     "logger",
+    "AlphaDefinition",
+    "AlphaEngine",
+    "AlphaSample",
+    "AlphaSampleCache",
     "AlphaDataset",
     "Segment",
     "to_datetime",
@@ -21,7 +25,17 @@ __all__ = [
 
 def __getattr__(name: str) -> Any:
     """Lazily import optional alpha components on first access."""
-    if name in {"AlphaDataset", "Segment", "to_datetime"}:
+    if name in {"AlphaDefinition", "AlphaEngine", "AlphaSample", "AlphaSampleCache"}:
+        from .definition import AlphaDefinition
+        from .engine import AlphaEngine, AlphaSample, AlphaSampleCache
+
+        values = {
+            "AlphaDefinition": AlphaDefinition,
+            "AlphaEngine": AlphaEngine,
+            "AlphaSample": AlphaSample,
+            "AlphaSampleCache": AlphaSampleCache,
+        }
+    elif name in {"AlphaDataset", "Segment", "to_datetime"}:
         from .dataset import AlphaDataset, Segment, to_datetime
 
         values = {

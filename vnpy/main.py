@@ -22,7 +22,6 @@ from vnpy.event.engine import ModuleEngine
 from vnpy.event.event import EngineEvent, EventType
 from vnpy.factor.realtime_module import factor_module_entry
 from vnpy.config.runtime_config import DEFAULT_BACKTEST_END_TIME, DEFAULT_BACKTEST_START_TIME, DEFAULT_COMMISSION_RATIO, DEFAULT_FACTOR_MAX_WORKERS, DEFAULT_FACTOR_MODE, DEFAULT_FREQUENCY, DEFAULT_GM_TOKEN, DEFAULT_INITIAL_CASH, DEFAULT_RUNTIME_CONFIG, DEFAULT_SLIPPAGE_RATIO, DEFAULT_STRATEGY_ID, DEFAULT_SUBSCRIPTION_FALLBACK_DAYS, DEFAULT_SUBSCRIPTION_QUERY_DATE, GmSqliteConfig, RunMode, RuntimeConfig, load_runtime_config
-from vnpy.factor.batch_runner import run_gm_sqlite_batch
 from vnpy.strategy.strategy_module import strategy_engine_module_entry
 from vnpy.subscription.pool import create_default_pool
 
@@ -56,6 +55,7 @@ def register_factor_module(frequency: str) -> None:
             "maxlen": 30000,
             "mode": DEFAULT_FACTOR_MODE,
             "max_workers": DEFAULT_FACTOR_MAX_WORKERS,
+            "alphas": [],
             "strategy_module": "strategy",
             "enable_print": False,
             "print_every": 20,
@@ -77,8 +77,8 @@ def register_strategy_module() -> None:
                 {
                     "name": "factor_signal",
                     "class": "vnpy.strategy.factor_signal_strategy.FactorSignalStrategy",
-                    "active": True,
-                    "factors": ["momentum_20", "volatility_20", "volume_20"],
+                    "active": False,
+                    "factors": [],
                     "setting": {
                         "enable_log": False,
                         "enable_print": False,
@@ -88,7 +88,7 @@ def register_strategy_module() -> None:
                     "name": "factor_debug",
                     "class": "vnpy.strategy.strategies.factor_debug.factor_debug_strategy.FactorDebugStrategy",
                     "active": False,
-                    "factors": ["momentum_20", "volatility_20", "volume_20"],
+                    "factors": [],
                     "setting": {
                         "print_limit": 20,
                         "print_factor_values": False,
@@ -372,12 +372,6 @@ def run_from_config(config: RuntimeConfig) -> None:
         setting = config.gm_sqlite
         assert setting is not None
         run_gm_sqlite_replay(setting)
-        return
-
-    if config.mode == RunMode.GM_SQLITE_BATCH:
-        setting = config.gm_sqlite_batch
-        assert setting is not None
-        run_gm_sqlite_batch(setting)
         return
 
     if config.mode == RunMode.DATABASE:

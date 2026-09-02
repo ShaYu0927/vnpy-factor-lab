@@ -3,7 +3,6 @@
 from .runtime_config import (
     DEFAULT_RUNTIME_CONFIG,
     GmLocalConfig,
-    GmSqliteBatchConfig,
     GmSqliteConfig,
     RunMode,
     RuntimeConfig,
@@ -13,7 +12,6 @@ from .runtime_config import (
 __all__ = [
     "DEFAULT_RUNTIME_CONFIG",
     "GmLocalConfig",
-    "GmSqliteBatchConfig",
     "GmSqliteConfig",
     "RunMode",
     "RuntimeConfig",

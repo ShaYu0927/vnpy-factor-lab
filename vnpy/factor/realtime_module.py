@@ -1,9 +1,9 @@
 from vnpy.datafeed.bar_cache import BarCache
+from vnpy.alpha.definition import AlphaDefinition
+from vnpy.alpha.engine import AlphaSampleCache
 from vnpy.event.base_module import BaseModule, make_module_entry
 from vnpy.event.event import EngineEvent, EventType
-from vnpy.factor.core.factor_engine import ExecutionMode
-from vnpy.factor.core.factor_sample import FastFactorSampleCache
-from vnpy.factor.realtime_service import RealtimeFactorService
+from vnpy.factor.realtime_service import RealtimeAlphaService
 
 
 class RealtimeFactorModule(BaseModule):
@@ -38,37 +38,53 @@ class RealtimeFactorModule(BaseModule):
                     event_count,
                 )
 
-        self.post(
-            target=self.get_config("strategy_module", "strategy"),
-            event_type=EventType.FACTOR,
-            symbol=sample.symbol,
-            data={
-                "sample": sample,
-                "factor_result": service.latest_batch_result,
-            },
-        )
+        data = {
+            "sample": sample,
+            "factor_result": service.latest_batch_result,
+            "bar_event_id": event.event_id,
+        }
+        for target in self.event_targets:
+            self.post(
+                target=target,
+                event_type=EventType.FACTOR,
+                symbol=sample.symbol,
+                data=dict(data),
+            )
 
     @property
-    def factor_service(self) -> RealtimeFactorService:
+    def event_targets(self) -> tuple[str, ...]:
+        """Resolve factor consumers while retaining strategy_module compatibility."""
+        configured = self.get_config("factor_targets")
+        if configured is None:
+            configured = [self.get_config("strategy_module", "strategy")]
+        elif isinstance(configured, str):
+            configured = [configured]
+        if not isinstance(configured, (list, tuple)):
+            raise TypeError("factor_targets must be a string or sequence of strings")
+        targets = tuple(dict.fromkeys(str(item).strip() for item in configured if str(item).strip()))
+        if not targets:
+            raise ValueError("factor_targets must not be empty")
+        return targets
+
+    @property
+    def factor_service(self) -> RealtimeAlphaService:
         service = self.get_object("factor_service")
         if service is not None:
             return service
 
         maxlen = int(self.get_config("maxlen", 30000))
         frequency = self.get_config("frequency", "60s")
-        mode = ExecutionMode(self.get_config("mode", ExecutionMode.SYNC.value))
-        max_workers = self.get_config("max_workers")
-        if max_workers is not None:
-            max_workers = int(max_workers)
-
         bar_cache = BarCache(maxlen=maxlen)
-        sample_cache = FastFactorSampleCache(maxlen=maxlen)
-        service = RealtimeFactorService(
+        sample_cache = AlphaSampleCache(maxlen=maxlen)
+        raw_definitions = self.get_config("alphas", [])
+        definitions = tuple(AlphaDefinition(**item) for item in raw_definitions)
+        universe = self.get_config("universe")
+        service = RealtimeAlphaService(
             bar_cache=bar_cache,
             sample_cache=sample_cache,
+            definitions=definitions,
+            universe=universe,
             frequency=frequency,
-            mode=mode,
-            max_workers=max_workers,
         )
 
         self.set_object("bar_cache", bar_cache)

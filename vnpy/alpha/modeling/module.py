@@ -1,12 +1,14 @@
 from __future__ import annotations
 
-from typing import Any
-
 from vnpy.common.logger import get_logger
 from vnpy.event.base_module import BaseModule, make_module_entry
 from vnpy.event.event import EngineEvent, EventType
 
-from .schema import FactorObservation
+from .service import (
+    LegacyModelTrainingService,
+    ModelTrainingService,
+    training_request_from_event,
+)
 
 logger = get_logger("alpha.model.module")
 
@@ -19,10 +21,9 @@ class ModelModule(BaseModule):
             return
 
         response_target = event.get("response_target") or event.source
-        observations = event.get("observations")
-        feature_names = event.get("feature_names")
         try:
-            result = self._train(event)
+            request = training_request_from_event(event.data)
+            result = self.training_service.train(request)
         except Exception as exc:
             self.set_state("latest_error", exc)
             logger.exception(
@@ -62,32 +63,16 @@ class ModelModule(BaseModule):
                 },
             )
 
-    @staticmethod
-    def _train(event: EngineEvent) -> Any:
-        # Import lazily so merely registering the module does not load optional
-        # modeling dependencies.
-        from vnpy.factor.model_pipeline import train_and_predict_latest
-
-        observations = event.get("observations")
-        feature_names = event.get("feature_names")
-        if not isinstance(observations, (list, tuple)):
-            raise TypeError("model training observations must be a sequence")
-        if not all(isinstance(item, FactorObservation) for item in observations):
-            raise TypeError("model training observations contain invalid items")
-        if not isinstance(feature_names, (list, tuple)) or not feature_names:
-            raise ValueError("model training feature_names must not be empty")
-
-        return train_and_predict_latest(
-            observations=observations,
-            feature_names=feature_names,
-            horizon=int(event.get("horizon", 5)),
-            model_output=event.get("model_output"),
-            signal_output=event.get("signal_output"),
-            evaluate_factors=bool(event.get("evaluate_factors", False)),
-            factor_quantiles=int(event.get("factor_quantiles", 2)),
-            min_abs_ic=float(event.get("min_abs_ic", 0.02)),
-            min_abs_ic_ir=float(event.get("min_abs_ic_ir", 0.20)),
-        )
+    @property
+    def training_service(self) -> ModelTrainingService:
+        """Return the injected implementation through the abstract interface."""
+        service = self.get_object("training_service")
+        if service is None:
+            service = LegacyModelTrainingService()
+            self.set_object("training_service", service)
+        if not isinstance(service, ModelTrainingService):
+            raise TypeError("training_service must implement ModelTrainingService")
+        return service
 
 
 model_module_entry = make_module_entry(ModelModule)

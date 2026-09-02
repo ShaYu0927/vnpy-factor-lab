@@ -92,11 +92,7 @@ class QlibDataLoader:
             raise ValueError("input data contains duplicate datetime/symbol rows")
 
     @staticmethod
-    def _validate_config(
-        task: str,
-        fields: Sequence[str],
-        names: Sequence[str],
-    ) -> None:
+    def _validate_config(task: str, fields: Sequence[str], names: Sequence[str],) -> None:
         if len(fields) != len(names):
             raise ValueError(
                 f"{task} fields and names must have the same length"

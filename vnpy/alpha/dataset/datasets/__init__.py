@@ -1,4 +1,3 @@
-from .basic_3 import Basic3DL
+"""Dataset implementations are supplied by research or mining workflows."""
 
-
-__all__ = ["Basic3DL"]
+__all__: list[str] = []

@@ -9,6 +9,7 @@ from .factor_selection import (
 )
 from .preprocessing import StandardFeaturePipeline
 from .schema import FactorObservation, ModelPrediction, RegressionMetrics
+from .service import LegacyModelTrainingService, ModelTrainingRequest, ModelTrainingService
 from .workflow import LinearModelWorkflow, TrainingResult
 
 __all__ = [
@@ -25,6 +26,9 @@ __all__ = [
     "LinearModelWorkflow",
     "ModelArtifact",
     "ModelPrediction",
+    "ModelTrainingRequest",
+    "ModelTrainingService",
+    "LegacyModelTrainingService",
     "RegressionEvaluator",
     "RegressionMetrics",
     "StandardFeaturePipeline",

@@ -70,10 +70,7 @@ class AlphalensFactorSelector:
         ]
         asset_count = len({item.symbol for item in training})
         if asset_count < 20:
-            logger.warning(
-                "横截面仅 %s 只股票，IC 结果只适合流程演示，不具备统计可靠性",
-                asset_count,
-            )
+            logger.warning("横截面仅 %s 只股票,IC 结果只适合流程演示，不具备统计可靠性", asset_count)
         prices = pd.DataFrame([
             {
                 "datetime": item.trade_date,
