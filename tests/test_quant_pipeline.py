@@ -10,7 +10,7 @@ from vnpy.alpha.modeling import FactorObservation
 from vnpy.quant import (
     ComponentRegistry,
     ComponentSpec,
-    LinearTrainingPipeline,
+    AlphaTrainingPipeline,
     ModelBundle,
     PipelineConfig,
     RunStatus,
@@ -79,7 +79,7 @@ def test_signal_frame_rejects_duplicate_identity() -> None:
 
 
 def test_compatible_training_pipeline_records_reproducible_artifacts(tmp_path) -> None:
-    result = LinearTrainingPipeline(make_config(tmp_path)).run(make_observations())
+    result = AlphaTrainingPipeline(make_config(tmp_path)).run(make_observations())
 
     metadata = json.loads((result.run_path / "run.json").read_text(encoding="utf-8"))
     restored = ModelBundle.load(result.run_path / "artifacts" / "model_bundle.pkl")
@@ -98,7 +98,7 @@ def test_failed_pipeline_marks_run_failed(tmp_path) -> None:
     broken = make_observations(days=2)
 
     with pytest.raises(ValueError):
-        LinearTrainingPipeline(config).run(broken)
+        AlphaTrainingPipeline(config).run(broken)
 
     run_path = next((tmp_path / "compatibility").iterdir())
     metadata = json.loads((run_path / "run.json").read_text(encoding="utf-8"))

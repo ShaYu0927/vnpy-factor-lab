@@ -8,14 +8,14 @@ from vnpy.alpha.modeling import (
     FactorObservation,
     FactorSelectionMetric,
     FactorSelectionResult,
-    LinearModelWorkflow,
+    AlphaModelWorkflow,
     ModelArtifact,
     StandardFeaturePipeline,
 )
 
 
 class SelectMomentumOnly:
-    def select(self, observations, feature_names, train_end):
+    def select(self, training, feature_names):
         return FactorSelectionResult(
             selected_features=("momentum",),
             metrics=(FactorSelectionMetric("momentum", 0.1, 0.5, 1, True),),
@@ -89,7 +89,7 @@ def test_standard_pipeline_reuses_training_statistics() -> None:
 
 
 def test_workflow_saves_model_with_inference_contract(tmp_path) -> None:
-    workflow = LinearModelWorkflow(
+    workflow = AlphaModelWorkflow(
         ["momentum", "volatility"],
         horizon=3,
         standardize=True,
@@ -108,7 +108,7 @@ def test_workflow_saves_model_with_inference_contract(tmp_path) -> None:
 
 
 def test_workflow_trains_and_predicts_with_selected_features_only() -> None:
-    workflow = LinearModelWorkflow(
+    workflow = AlphaModelWorkflow(
         ["momentum", "volatility"],
         horizon=3,
         factor_selector=SelectMomentumOnly(),  # type: ignore[arg-type]

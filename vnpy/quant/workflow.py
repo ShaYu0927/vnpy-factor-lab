@@ -3,10 +3,10 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence, cast
+from typing import Any, Sequence, cast
 
 from vnpy.alpha.model.template import AlphaModel
-from vnpy.alpha.modeling import FactorObservation, LinearModelWorkflow, RegressionMetrics
+from vnpy.alpha.modeling import AlphaModelWorkflow, FactorObservation, RegressionMetrics
 
 from .config import PipelineConfig
 from .experiment import LocalRecorder
@@ -23,8 +23,8 @@ class PipelineResult:
     metrics: RegressionMetrics
 
 
-class LinearTrainingPipeline:
-    """Compatibility workflow that composes the existing alpha modeling stack."""
+class AlphaTrainingPipeline:
+    """Record and run one alpha model experiment."""
 
     def __init__(self, config: PipelineConfig, registry: ComponentRegistry | None = None) -> None:
         self.config = config
@@ -47,7 +47,7 @@ class LinearTrainingPipeline:
                 "data_fingerprint": fingerprint,
                 "observation_count": len(observations),
             })
-            workflow = LinearModelWorkflow(
+            workflow = AlphaModelWorkflow(
                 training.feature_names,
                 horizon=training.horizon,
                 model=model,
@@ -84,25 +84,29 @@ def default_registry() -> ComponentRegistry:
 
     registry = ComponentRegistry()
     registry.register("model", "linear", LinearRegressionModel)
-    # Optional alpha dependencies are imported only when the registry is built.
-    # A minimal installation can still use config, schemas, and recording.
-    try:
-        from vnpy.alpha.model.models.lasso_model import LassoModel
-        registry.register("model", "lasso", LassoModel)
-    except ImportError:
-        pass
-    try:
-        from vnpy.alpha.model.models.lgb_model import LgbModel
-        registry.register("model", "lgb", LgbModel)
-    except ImportError:
-        pass
-    try:
-        from vnpy.alpha.model.models.mlp_model import MlpModel
-        registry.register("model", "mlp", MlpModel)
-    except ImportError:
-        pass
+    registry.register("model", "lasso", _create_lasso)
+    registry.register("model", "lgb", _create_lgb)
+    registry.register("model", "mlp", _create_mlp)
     registry.register("recorder", "local", LocalRecorder)
     return registry
+
+
+def _create_lasso(**kwargs: Any) -> AlphaModel:
+    from vnpy.alpha.model.models.lasso_model import LassoModel
+
+    return LassoModel(**kwargs)
+
+
+def _create_lgb(**kwargs: Any) -> AlphaModel:
+    from vnpy.alpha.model.models.lgb_model import LgbModel
+
+    return LgbModel(**kwargs)
+
+
+def _create_mlp(**kwargs: Any) -> AlphaModel:
+    from vnpy.alpha.model.models.mlp_model import MlpModel
+
+    return MlpModel(**kwargs)
 
 
 def load_observations(path: str | Path) -> list[FactorObservation]:

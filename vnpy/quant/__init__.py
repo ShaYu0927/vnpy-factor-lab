@@ -4,12 +4,12 @@ from .config import ComponentSpec, PipelineConfig, load_pipeline_config
 from .experiment import LocalRecorder, RunStatus
 from .model import ModelBundle, SignalFrame
 from .registry import ComponentRegistry
-from .workflow import LinearTrainingPipeline, PipelineResult
+from .workflow import AlphaTrainingPipeline, PipelineResult
 
 __all__ = [
     "ComponentRegistry",
     "ComponentSpec",
-    "LinearTrainingPipeline",
+    "AlphaTrainingPipeline",
     "LocalRecorder",
     "ModelBundle",
     "PipelineConfig",

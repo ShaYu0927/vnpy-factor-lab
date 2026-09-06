@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 
 from .config import load_pipeline_config
-from .workflow import LinearTrainingPipeline, load_observations
+from .workflow import AlphaTrainingPipeline, load_observations
 
 
 def main() -> None:
@@ -12,7 +12,7 @@ def main() -> None:
     parser.add_argument("--observations", required=True, help="factor observation JSON file")
     args = parser.parse_args()
 
-    result = LinearTrainingPipeline(load_pipeline_config(args.config)).run(
+    result = AlphaTrainingPipeline(load_pipeline_config(args.config)).run(
         load_observations(args.observations)
     )
     print(f"run_id={result.run_id}")

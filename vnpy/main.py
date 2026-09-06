@@ -13,7 +13,7 @@ if __package__ in {None, ""}:
 
 from gm.api import *
 
-from vnpy.common.logger import init_global_logger
+from vnpy.common.logger import init_global_logger, get_logger, shutdown_global_logger
 from vnpy.datafeed.bar_cache import convert_gm_bar
 from vnpy.datafeed.gm_local_datafeed import GmLocalDataFeed
 from vnpy.datafeed.gm_sqlite_datafeed import GmSqliteDataFeed
@@ -28,6 +28,7 @@ from vnpy.subscription.pool import create_default_pool
 
 
 module_engine = ModuleEngine()
+logger = get_logger("main")
 
 
 # =============================================================================
@@ -35,6 +36,7 @@ module_engine = ModuleEngine()
 # =============================================================================
 
 def setup_modules(frequency: str = DEFAULT_FREQUENCY) -> None:
+    logger.info("[main/modules] starting factor and strategy modules frequency=%s", frequency)
     register_factor_module(frequency)
     register_strategy_module()
 
@@ -46,6 +48,7 @@ def register_factor_module(frequency: str) -> None:
     """
     if module_engine.module_exists("factor"):
         return
+    logger.warning("[main/factor] alphas=[]: replay will not calculate factors. Whole-market batch entry: python -m examples.alpha101_market_batch (run from project directory)")
 
     module_engine.register_module(
         name="factor",
@@ -236,6 +239,9 @@ def run_gm_local_replay(
 
 def run_gm_sqlite_replay(config: GmSqliteConfig) -> None:
     """Stream GM yearly SQLite bars through the existing factor pipeline."""
+    started = time.perf_counter()
+    logger.info("[replay/start] source=gm_sqlite root=%s range=%s..%s frequency=%s symbols=%s",
+                config.root, config.start, config.end, config.frequency, config.symbols or "ALL")
     feed = GmSqliteDataFeed(config.root)
     setup_modules(frequency=config.frequency)
     symbols = parse_symbols(config.symbols)
@@ -266,9 +272,19 @@ def run_gm_sqlite_replay(config: GmSqliteConfig) -> None:
             first_bar = first_bar or bar
             last_bar = bar
             symbol_set.add(bar.symbol)
+            if count == 1 or count % max(1, config.progress_every) == 0:
+                logger.info("[replay/progress] bars=%d symbols=%d latest=%s %s queue=%d elapsed=%.2fs",
+                            count, len(symbol_set), bar.symbol, bar.bob,
+                            module_engine.queue_size("factor"), time.perf_counter() - started)
 
+        logger.info("[replay/drain] read complete bars=%d; waiting for factor/strategy queues", count)
         wait_module_idle("factor")
         wait_module_idle("strategy")
+        logger.info("[replay/complete] bars=%d symbols=%d first=%s last=%s elapsed=%.2fs",
+                    count, len(symbol_set), first_bar.bob if first_bar else None,
+                    last_bar.bob if last_bar else None, time.perf_counter() - started)
+        if not count:
+            logger.warning("[replay/empty] no matching bars; check source directory, date range, symbols and filters")
     finally:
         module_engine.stop_all()
 
@@ -356,7 +372,7 @@ def init_logger() -> None:
         level=20,
         max_bytes=20 * 1024 * 1024,
         backup_count=20,
-        enable_console=False,
+        enable_console=True,
         enable_file=True,
     )
 
@@ -371,6 +387,11 @@ def run_from_config(config: RuntimeConfig) -> None:
     if config.mode == RunMode.GM_SQLITE:
         setting = config.gm_sqlite
         assert setting is not None
+        alpha_options = config.raw.get("alpha101", {})
+        if alpha_options.get("enabled", False):
+            from vnpy.factor.sqlite_batch_runner import run_sqlite_alpha101
+            run_sqlite_alpha101(setting, alpha_options)
+            return
         run_gm_sqlite_replay(setting)
         return
 
@@ -385,8 +406,17 @@ def run_from_config(config: RuntimeConfig) -> None:
 
 def main() -> None:
     init_logger()
-    config = load_runtime_config(DEFAULT_RUNTIME_CONFIG)
-    run_from_config(config)
+    try:
+        logger.info("[main/start] config=%s", DEFAULT_RUNTIME_CONFIG)
+        config = load_runtime_config(DEFAULT_RUNTIME_CONFIG)
+        logger.info("[main/config] mode=%s", config.mode.value)
+        run_from_config(config)
+        logger.info("[main/complete] configured task finished")
+    except Exception:
+        logger.exception("[main/failed] configured task failed")
+        raise
+    finally:
+        shutdown_global_logger()
 
 
 if __name__ == "__main__":

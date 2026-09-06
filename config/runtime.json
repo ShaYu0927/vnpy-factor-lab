@@ -1,5 +1,10 @@
 {
   "mode": "gm_sqlite",
+  "alpha101": {
+    "enabled": true,
+    "history_dates": 320,
+    "root": "data/main_alpha101"
+  },
   "gm_local": {
     "symbols": "SHSE.600519,SHSE.600036,SHSE.600276,SHSE.601318,SHSE.600900",
     "frequency": "1d",

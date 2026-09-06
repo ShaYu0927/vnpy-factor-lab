@@ -16,8 +16,8 @@ def test_model_module_emits_trained_and_alpha_signal(monkeypatch) -> None:
         selected_features=("momentum_20",),
     )
     monkeypatch.setattr(
-        "vnpy.factor.model_pipeline.train_and_predict_latest",
-        lambda **_kwargs: result,
+        "vnpy.alpha.modeling.module.DefaultModelTrainingService.train",
+        lambda *_args, **_kwargs: result,
     )
     responses = []
     signals = []

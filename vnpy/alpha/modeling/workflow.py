@@ -14,7 +14,7 @@ from vnpy.alpha.model.reweighter import Reweighter
 from .artifact import ModelArtifact
 from .dataset import ChronologicalSplitter, DatasetSplit, ForwardReturnDatasetBuilder, FrameDataset
 from .evaluation import RegressionEvaluator
-from .factor_selection import AlphalensFactorSelector, FactorSelectionResult
+from .factor_selection import AlphaFactorSelector, FactorSelectionResult
 from .preprocessing import StandardFeaturePipeline
 from .schema import FactorObservation, ModelPrediction, RegressionMetrics
 
@@ -28,7 +28,7 @@ class TrainingResult:
     factor_selection: FactorSelectionResult | None = None   # 因子筛选结果，记录通过 Alphalens 过滤后的有效因子及对应评价指标
 
 
-class LinearModelWorkflow:
+class AlphaModelWorkflow:
     """Orchestrate preparation, training, evaluation, and latest ranking."""
 
     def __init__(
@@ -37,16 +37,22 @@ class LinearModelWorkflow:
         horizon: int = 5,
         model: AlphaModel | None = None,
         standardize: bool = False,
-        factor_selector: AlphalensFactorSelector | None = None,
+        factor_selector: AlphaFactorSelector | None = None,
         reweighter: Reweighter | None = None,
+        entry_offset: int = 1,
     ) -> None:
         self.feature_names = tuple(feature_names)
-        self.builder = ForwardReturnDatasetBuilder(self.feature_names, horizon)
-        self.splitter = ChronologicalSplitter(purge_horizon=horizon)
+        self.builder = ForwardReturnDatasetBuilder(
+            self.feature_names,
+            horizon,
+            entry_offset,
+        )
+        self.splitter = ChronologicalSplitter(purge_horizon=horizon + entry_offset)
         self.preprocessor = StandardFeaturePipeline(self.feature_names, enabled=standardize)
         self.model = model or LinearRegressionModel()
         self.evaluator = RegressionEvaluator()
         self.horizon = horizon
+        self.entry_offset = entry_offset
         self.factor_selector = factor_selector
         self.reweighter = reweighter
 
@@ -55,11 +61,9 @@ class LinearModelWorkflow:
         raw_split = self.splitter.split(labeled)
         factor_selection = None
         if self.factor_selector is not None:
-            train_end = raw_split.train["datetime"].max()
             factor_selection = self.factor_selector.select(
-                observations,
+                raw_split.train,
                 self.feature_names,
-                train_end,
             )
             self.feature_names = factor_selection.selected_features
             self.preprocessor = StandardFeaturePipeline(
@@ -98,6 +102,7 @@ class LinearModelWorkflow:
             feature_names=self.feature_names,
             label_horizon=self.horizon,
         )
+        artifact.metadata["label_entry_offset"] = self.entry_offset
         predictions = self._predict_latest(observations, artifact)
         return TrainingResult(artifact, split, metrics, predictions, factor_selection)
 

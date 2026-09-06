@@ -5,7 +5,7 @@ from vnpy.event.base_module import BaseModule, make_module_entry
 from vnpy.event.event import EngineEvent, EventType
 
 from .service import (
-    LegacyModelTrainingService,
+    DefaultModelTrainingService,
     ModelTrainingService,
     training_request_from_event,
 )
@@ -68,7 +68,7 @@ class ModelModule(BaseModule):
         """Return the injected implementation through the abstract interface."""
         service = self.get_object("training_service")
         if service is None:
-            service = LegacyModelTrainingService()
+            service = DefaultModelTrainingService()
             self.set_object("training_service", service)
         if not isinstance(service, ModelTrainingService):
             raise TypeError("training_service must implement ModelTrainingService")

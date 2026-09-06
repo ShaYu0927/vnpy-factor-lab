@@ -9,6 +9,7 @@ import polars as pl
 from vnpy.alpha.dataset import Segment
 
 from .schema import FactorObservation
+from .alpha_analysis import AlphaDatasetBuilder
 
 
 class FrameDataset:
@@ -36,37 +37,39 @@ class DatasetSplit:
 
 
 class ForwardReturnDatasetBuilder:
-    """Build a model frame using a forward return measured in bars."""
+    """Compatibility adapter from observations to the canonical alpha dataset."""
 
-    def __init__(self, feature_names: Sequence[str], horizon: int = 5) -> None:
+    def __init__(
+        self,
+        feature_names: Sequence[str],
+        horizon: int = 5,
+        entry_offset: int = 1,
+    ) -> None:
         if horizon <= 0:
             raise ValueError("horizon must be greater than zero")
         if not feature_names:
             raise ValueError("feature_names must not be empty")
         self.feature_names: tuple[str, ...] = tuple(feature_names)
         self.horizon: int = horizon
+        self.entry_offset = entry_offset
 
     # 根据因子观测数据构造模型训练 DataFrame
     def build(self, observations: Sequence[FactorObservation]) -> pl.DataFrame:
-        by_symbol: dict[str, list[FactorObservation]] = {}
-        for observation in observations:
-            by_symbol.setdefault(observation.symbol, []).append(observation)
-
-        rows: list[dict[str, object]] = []
-        for symbol_observations in by_symbol.values():
-            symbol_observations.sort(key=lambda item: item.trade_date)
-            for index in range(len(symbol_observations) - self.horizon):
-                current = symbol_observations[index]
-                future = symbol_observations[index + self.horizon]
-                rows.append({
-                    "datetime": datetime.combine(current.trade_date, datetime.min.time()),
-                    "vt_symbol": current.symbol,
-                    **current.features,
-                    "label": future.close / current.close - 1.0,
-                })
-
-        columns = ["datetime", "vt_symbol", *self.feature_names, "label"]
-        return pl.DataFrame(rows).select(columns).sort(["datetime", "vt_symbol"])
+        rows = [{
+            "datetime": datetime.combine(item.trade_date, datetime.min.time()),
+            "vt_symbol": item.symbol,
+            "close": item.close,
+            **item.features,
+        } for item in observations]
+        if not rows:
+            raise ValueError("observations must not be empty")
+        frame = pl.DataFrame(rows)
+        features = frame.select(["datetime", "vt_symbol", *self.feature_names])
+        prices = frame.select(["datetime", "vt_symbol", "close"])
+        return AlphaDatasetBuilder(
+            horizon=self.horizon,
+            entry_offset=self.entry_offset,
+        ).build(features, prices, feature_names=self.feature_names)
 
 
 class ChronologicalSplitter:

@@ -4,6 +4,7 @@ from vnpy.alpha.engine import AlphaSampleCache
 from vnpy.event.base_module import BaseModule, make_module_entry
 from vnpy.event.event import EngineEvent, EventType
 from vnpy.factor.realtime_service import RealtimeAlphaService
+from vnpy.alpha.logger import logger
 
 
 class RealtimeFactorModule(BaseModule):
@@ -17,11 +18,11 @@ class RealtimeFactorModule(BaseModule):
 
         service = self.factor_service
         bar = event.get("bar")
-        sample = service.on_bar(bar)
+        service.on_bar(bar)
+        for sample in service.latest_samples:
+            self._publish_sample(event, service, sample)
 
-        if sample is None:
-            return
-
+    def _publish_sample(self, event, service, sample) -> None:
         self.set_state("latest_sample", sample)
         self.set_state("latest_symbol", sample.symbol)
         self.set_state("latest_datetime", sample.datetime)
@@ -44,12 +45,14 @@ class RealtimeFactorModule(BaseModule):
             "bar_event_id": event.event_id,
         }
         for target in self.event_targets:
-            self.post(
+            posted = self.post(
                 target=target,
                 event_type=EventType.FACTOR,
                 symbol=sample.symbol,
                 data=dict(data),
             )
+            logger.info("FACTOR event: target=%s symbol=%s at=%s features=%d posted=%s",
+                        target, sample.symbol, sample.datetime, len(sample.features), posted)
 
     @property
     def event_targets(self) -> tuple[str, ...]:
@@ -85,6 +88,8 @@ class RealtimeFactorModule(BaseModule):
             definitions=definitions,
             universe=universe,
             frequency=frequency,
+            alpha101_factors=self.get_config("alpha101_factors"),
+            alpha101_history=int(self.get_config("alpha101_history", 320)),
         )
 
         self.set_object("bar_cache", bar_cache)

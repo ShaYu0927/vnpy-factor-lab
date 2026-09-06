@@ -83,6 +83,39 @@ class AlphaEngine:
     def calculate_latest(self, frame: pl.DataFrame, at: datetime | None = None) -> list[AlphaSample]:
         source = self._normalize_frame(frame)
         calculated = self.calculate(source)
+        return self._latest_samples(source, calculated, [item.name for item in self.definitions], at)
+
+    def calculate_alpha101(self, frame: pl.DataFrame, factors: Iterable[int] | None = None) -> pl.DataFrame:
+        """Calculate a daily multi-symbol panel and return framework feature columns.
+
+        Pass the entire universe together: many formulas rank across symbols.
+        Optional vwap, market_cap and industry fields are forwarded unchanged.
+        """
+        from .alphas.alpha101 import Alpha101
+
+        source = self._normalize_frame(frame)
+        panel = source.rename({"datetime": "date", "vt_symbol": "symbol"}).to_pandas()
+        values = Alpha101(panel).compute_all(factors).reset_index()
+        return pl.from_pandas(values).rename(
+            {"date": "datetime", "symbol": "vt_symbol"}
+        ).with_columns(
+            pl.col("datetime").cast(source.schema["datetime"]),
+            pl.col("vt_symbol").cast(source.schema["vt_symbol"]),
+        ).sort(["datetime", "vt_symbol"])
+
+    def calculate_alpha101_latest(
+        self, frame: pl.DataFrame, factors: Iterable[int] | None = None, at: datetime | None = None,
+    ) -> list[AlphaSample]:
+        """Return complete finite samples for the requested factors only."""
+        source = self._normalize_frame(frame)
+        calculated = self.calculate_alpha101(source, factors)
+        names = [name for name in calculated.columns if name not in {"datetime", "vt_symbol"}]
+        return self._latest_samples(source, calculated, names, at)
+
+    def _latest_samples(
+        self, source: pl.DataFrame, calculated: pl.DataFrame,
+        names: Sequence[str], at: datetime | None,
+    ) -> list[AlphaSample]:
         if at is None:
             latest = calculated.group_by("vt_symbol").agg(pl.all().sort_by("datetime").last())
         else:
@@ -92,11 +125,11 @@ class AlphaEngine:
         samples: list[AlphaSample] = []
         for row in latest.iter_rows(named=True):
             features = {
-                definition.name: float(row[definition.name])
-                for definition in self.definitions
-                if row.get(definition.name) is not None and isfinite(float(row[definition.name]))
+                name: float(row[name])
+                for name in names
+                if row.get(name) is not None and isfinite(float(row[name]))
             }
-            if len(features) != len(self.definitions):
+            if len(features) != len(names):
                 continue
             samples.append(AlphaSample(
                 symbol=str(row["vt_symbol"]), datetime=row["datetime"],
@@ -112,6 +145,13 @@ class AlphaEngine:
                 row = {"datetime": dt, "vt_symbol": symbol}
                 for field in ("open", "high", "low", "close", "volume", "amount", "turn"):
                     value = _bar_value(bar, field, required=False)
+                    if value is not None:
+                        row[field] = value
+                extra = _bar_value(bar, "extra", required=False) or {}
+                for field in ("vwap", "market_cap", "industry", "sector", "subindustry"):
+                    value = _bar_value(bar, field, required=False)
+                    if value is None:
+                        value = extra.get(field)
                     if value is not None:
                         row[field] = value
                 rows.append(row)

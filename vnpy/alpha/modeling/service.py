@@ -1,10 +1,24 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+import csv
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Sequence
 
 from .schema import FactorObservation
+from .factor_selection import AlphaFactorSelector
+from .workflow import AlphaModelWorkflow
+
+
+@dataclass(slots=True)
+class ModelTrainingResult:
+    training_samples: int
+    test_samples: int
+    mse: float
+    r2: float
+    predictions: list[tuple[str, float]]
+    selected_features: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,7 +36,6 @@ class ModelTrainingRequest:
     model_output: str | None = None
     signal_output: str | None = None
     evaluate_factors: bool = False
-    factor_quantiles: int = 2
     min_abs_ic: float = 0.02
     min_abs_ic_ir: float = 0.20
 
@@ -46,24 +59,51 @@ class ModelTrainingService(ABC):
         raise NotImplementedError
 
 
-class LegacyModelTrainingService(ModelTrainingService):
-    """Adapter retaining the existing factor.model_pipeline behavior."""
+class DefaultModelTrainingService(ModelTrainingService):
+    """Run the canonical alpha modeling workflow."""
 
     def train(self, request: ModelTrainingRequest) -> Any:
-        # Lazy import keeps optional ML dependencies outside module startup.
-        from vnpy.factor.model_pipeline import train_and_predict_latest
-
-        return train_and_predict_latest(
-            observations=request.observations,
-            feature_names=request.feature_names,
-            horizon=request.horizon,
-            model_output=request.model_output,
-            signal_output=request.signal_output,
-            evaluate_factors=request.evaluate_factors,
-            factor_quantiles=request.factor_quantiles,
-            min_abs_ic=request.min_abs_ic,
-            min_abs_ic_ir=request.min_abs_ic_ir,
+        selector = None
+        if request.evaluate_factors:
+            selector = AlphaFactorSelector(
+                min_abs_rank_ic=request.min_abs_ic,
+                min_abs_rank_ic_ir=request.min_abs_ic_ir,
+            )
+        result = AlphaModelWorkflow(
+            request.feature_names,
+            request.horizon,
+            factor_selector=selector,
+        ).run(request.observations)
+        if request.model_output:
+            result.artifact.save(request.model_output)
+        if request.signal_output:
+            self._write_signals(result.predictions, request.signal_output)
+        return ModelTrainingResult(
+            training_samples=result.split.train.height + result.split.valid.height,
+            test_samples=result.split.test.height,
+            mse=result.metrics.mse,
+            r2=result.metrics.r2,
+            predictions=[
+                (item.symbol, item.predicted_return)
+                for item in result.predictions
+            ],
+            selected_features=result.artifact.feature_names,
         )
+
+    @staticmethod
+    def _write_signals(predictions: Sequence[Any], output: str) -> None:
+        path = Path(output).expanduser().resolve()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", encoding="utf-8", newline="") as file:
+            writer = csv.writer(file)
+            writer.writerow(["trade_date", "symbol", "predicted_return", "rank"])
+            for item in predictions:
+                writer.writerow([
+                    item.trade_date.isoformat(),
+                    item.symbol,
+                    item.predicted_return,
+                    item.rank,
+                ])
 
 
 def training_request_from_event(data: dict[str, Any]) -> ModelTrainingRequest:
@@ -80,7 +120,6 @@ def training_request_from_event(data: dict[str, Any]) -> ModelTrainingRequest:
         model_output=data.get("model_output"),
         signal_output=data.get("signal_output"),
         evaluate_factors=bool(data.get("evaluate_factors", False)),
-        factor_quantiles=int(data.get("factor_quantiles", 2)),
         min_abs_ic=float(data.get("min_abs_ic", 0.02)),
         min_abs_ic_ir=float(data.get("min_abs_ic_ir", 0.20)),
     )

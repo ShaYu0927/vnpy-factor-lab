@@ -1,21 +1,38 @@
 from .alphalens_evaluator import AlphalensEvaluator, AlphalensReport
+from .alpha_analysis import (
+    AlphaAnalysisReport,
+    AlphaAnalyzer,
+    AlphaDatasetBuilder,
+    AlphaMetric,
+)
 from .artifact import ModelArtifact
 from .dataset import ChronologicalSplitter, DatasetSplit, ForwardReturnDatasetBuilder, FrameDataset
 from .evaluation import RegressionEvaluator
 from .factor_selection import (
+    AlphaFactorSelector,
     AlphalensFactorSelector,
     FactorSelectionMetric,
     FactorSelectionResult,
 )
 from .preprocessing import StandardFeaturePipeline
 from .schema import FactorObservation, ModelPrediction, RegressionMetrics
-from .service import LegacyModelTrainingService, ModelTrainingRequest, ModelTrainingService
-from .workflow import LinearModelWorkflow, TrainingResult
+from .service import (
+    DefaultModelTrainingService,
+    ModelTrainingRequest,
+    ModelTrainingResult,
+    ModelTrainingService,
+)
+from .workflow import AlphaModelWorkflow, TrainingResult
 
 __all__ = [
     "AlphalensEvaluator",
     "AlphalensReport",
+    "AlphaAnalysisReport",
+    "AlphaAnalyzer",
+    "AlphaDatasetBuilder",
+    "AlphaMetric",
     "AlphalensFactorSelector",
+    "AlphaFactorSelector",
     "ChronologicalSplitter",
     "DatasetSplit",
     "FactorObservation",
@@ -23,12 +40,13 @@ __all__ = [
     "FactorSelectionResult",
     "ForwardReturnDatasetBuilder",
     "FrameDataset",
-    "LinearModelWorkflow",
+    "AlphaModelWorkflow",
     "ModelArtifact",
     "ModelPrediction",
     "ModelTrainingRequest",
     "ModelTrainingService",
-    "LegacyModelTrainingService",
+    "DefaultModelTrainingService",
+    "ModelTrainingResult",
     "RegressionEvaluator",
     "RegressionMetrics",
     "StandardFeaturePipeline",
