@@ -1,5 +1,6 @@
 from vnpy.datafeed.bar_cache import BarCache
 from vnpy.alpha.definition import AlphaDefinition
+from vnpy.alpha.alpha import Alpha
 from vnpy.alpha.engine import AlphaSampleCache
 from vnpy.event.base_module import BaseModule, make_module_entry
 from vnpy.event.event import EngineEvent, EventType
@@ -80,7 +81,10 @@ class RealtimeFactorModule(BaseModule):
         bar_cache = BarCache(maxlen=maxlen)
         sample_cache = AlphaSampleCache(maxlen=maxlen)
         raw_definitions = self.get_config("alphas", [])
-        definitions = tuple(AlphaDefinition(**item) for item in raw_definitions)
+        definitions = tuple(
+            Alpha(**item) if "formula" in item else AlphaDefinition(**item)
+            for item in raw_definitions
+        )
         universe = self.get_config("universe")
         service = RealtimeAlphaService(
             bar_cache=bar_cache,
@@ -88,8 +92,6 @@ class RealtimeFactorModule(BaseModule):
             definitions=definitions,
             universe=universe,
             frequency=frequency,
-            alpha101_factors=self.get_config("alpha101_factors"),
-            alpha101_history=int(self.get_config("alpha101_history", 320)),
         )
 
         self.set_object("bar_cache", bar_cache)

@@ -30,12 +30,24 @@ class DataProxy:
             s = self.df["data"] + other
         return self.result(s)
 
+    def __radd__(self, other: Union["DataProxy", int, float]) -> "DataProxy":
+        """Right addition operation."""
+        return self + other
+
     def __sub__(self, other: Union["DataProxy", int, float]) -> "DataProxy":
         """Subtraction operation"""
         if isinstance(other, DataProxy):
             s: pl.Series = self.df["data"] - other.df["data"]
         else:
             s = self.df["data"] - other
+        return self.result(s)
+
+    def __rsub__(self, other: Union["DataProxy", int, float]) -> "DataProxy":
+        """Right subtraction operation."""
+        if isinstance(other, DataProxy):
+            s: pl.Series = other.df["data"] - self.df["data"]
+        else:
+            s = other - self.df["data"]
         return self.result(s)
 
     def __mul__(self, other: Union["DataProxy", int, float]) -> "DataProxy":
@@ -60,6 +72,14 @@ class DataProxy:
             s: pl.Series = self.df["data"] / other.df["data"]
         else:
             s = self.df["data"] / other
+        return self.result(s)
+
+    def __rtruediv__(self, other: Union["DataProxy", int, float]) -> "DataProxy":
+        """Right division operation."""
+        if isinstance(other, DataProxy):
+            s: pl.Series = other.df["data"] / self.df["data"]
+        else:
+            s = other / self.df["data"]
         return self.result(s)
 
     def __abs__(self) -> "DataProxy":

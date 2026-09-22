@@ -5,6 +5,7 @@ from .logger import logger
 
 __all__ = [
     "logger",
+    "Alpha",
     "AlphaDefinition",
     "AlphaEngine",
     "AlphaSample",
@@ -25,7 +26,11 @@ __all__ = [
 
 def __getattr__(name: str) -> Any:
     """Lazily import optional alpha components on first access."""
-    if name in {"AlphaDefinition", "AlphaEngine", "AlphaSample", "AlphaSampleCache"}:
+    if name == "Alpha":
+        from .alpha import Alpha
+
+        values = {"Alpha": Alpha}
+    elif name in {"AlphaDefinition", "AlphaEngine", "AlphaSample", "AlphaSampleCache"}:
         from .definition import AlphaDefinition
         from .engine import AlphaEngine, AlphaSample, AlphaSampleCache
 

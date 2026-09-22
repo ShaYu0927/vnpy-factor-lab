@@ -1,30 +1,30 @@
 from __future__ import annotations
 
-import sqlite3
 import sys
 import time
-from collections import Counter
-from datetime import datetime
 from pathlib import Path
-from typing import Optional, List
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from gm.api import *
 
 from vnpy.common.logger import init_global_logger, get_logger, shutdown_global_logger
-from vnpy.datafeed.bar_cache import convert_gm_bar
-from vnpy.datafeed.gm_local_datafeed import GmLocalDataFeed
-from vnpy.datafeed.gm_sqlite_datafeed import GmSqliteDataFeed
-from vnpy.datafeed.model import BarData, BarSource, normalize_bar
+from vnpy.datafeed.parquet_datafeed import ParquetDataFeed
+from vnpy.datafeed.model import BarData, BarSource
 from vnpy.event.engine import ModuleEngine
 from vnpy.event.event import EngineEvent, EventType
 from vnpy.factor.realtime_module import factor_module_entry
-from vnpy.config.runtime_config import DEFAULT_BACKTEST_END_TIME, DEFAULT_BACKTEST_START_TIME, DEFAULT_COMMISSION_RATIO, DEFAULT_FACTOR_MAX_WORKERS, DEFAULT_FACTOR_MODE, DEFAULT_FREQUENCY, DEFAULT_GM_TOKEN, DEFAULT_INITIAL_CASH, DEFAULT_RUNTIME_CONFIG, DEFAULT_SLIPPAGE_RATIO, DEFAULT_STRATEGY_ID, DEFAULT_SUBSCRIPTION_FALLBACK_DAYS, DEFAULT_SUBSCRIPTION_QUERY_DATE, GmSqliteConfig, RunMode, RuntimeConfig, load_runtime_config
+from vnpy.config.runtime_config import (
+    DEFAULT_FACTOR_MAX_WORKERS,
+    DEFAULT_FACTOR_MODE,
+    DEFAULT_FREQUENCY,
+    DEFAULT_RUNTIME_CONFIG,
+    ParquetConfig,
+    RunMode,
+    RuntimeConfig,
+    load_runtime_config,
+)
 from vnpy.strategy.strategy_module import strategy_engine_module_entry
-from vnpy.subscription.pool import create_default_pool
-
 
 
 module_engine = ModuleEngine()
@@ -35,20 +35,21 @@ logger = get_logger("main")
 # 模块初始化
 # =============================================================================
 
-def setup_modules(frequency: str = DEFAULT_FREQUENCY) -> None:
+def setup_modules(frequency: str = DEFAULT_FREQUENCY, alphas=None, universe=None) -> None:
     logger.info("[main/modules] starting factor and strategy modules frequency=%s", frequency)
-    register_factor_module(frequency)
+    register_factor_module(frequency, alphas=alphas, universe=universe)
     register_strategy_module()
 
     module_engine.start_all()
 
-def register_factor_module(frequency: str) -> None:
+def register_factor_module(frequency: str, alphas=None, universe=None) -> None:
     """
     注册实时因子模块。
     """
     if module_engine.module_exists("factor"):
         return
-    logger.warning("[main/factor] alphas=[]: replay will not calculate factors. Whole-market batch entry: python -m examples.alpha101_market_batch (run from project directory)")
+    if not alphas:
+        logger.warning("[main/factor] alphas=[]: replay will not calculate factors")
 
     module_engine.register_module(
         name="factor",
@@ -58,7 +59,8 @@ def register_factor_module(frequency: str) -> None:
             "maxlen": 30000,
             "mode": DEFAULT_FACTOR_MODE,
             "max_workers": DEFAULT_FACTOR_MAX_WORKERS,
-            "alphas": [],
+            "alphas": alphas or [],
+            "universe": universe,
             "strategy_module": "strategy",
             "enable_print": False,
             "print_every": 20,
@@ -103,59 +105,8 @@ def register_strategy_module() -> None:
     )
 
 
-# =============================================================================
-# GM 回调函数
-# =============================================================================
-
-def init(context) -> None:
-    """
-    GM 初始化回调
-
-    这里负责：
-    1. 启动模块系统；
-    2. 创建股票池；
-    3. 订阅K线。
-    """
-    setup_modules(frequency=DEFAULT_FREQUENCY)
-
-    pool = create_default_pool(
-        query_date=DEFAULT_SUBSCRIPTION_QUERY_DATE,
-        fallback_days=DEFAULT_SUBSCRIPTION_FALLBACK_DAYS,
-    )
-    symbol_list = pool.symbols()
-    symbol_list = symbol_list[:5]
-
-    if not symbol_list:
-        return
-
-    symbols = ",".join(symbol_list)
-
-    subscribe(symbols=symbols, frequency=DEFAULT_FREQUENCY, count=30,)
-
-
-def on_bar(context, bars) -> None:
-    """
-    GM K线回调
-    """
-    converted_bars = [
-        convert_gm_bar(raw_bar, frequency=DEFAULT_FREQUENCY)
-        for raw_bar in bars
-    ]
-
-    for bar in converted_bars:
-        post_bar(bar, source=BarSource.GM_LIVE.value)
-
-
-def algo(context) -> None:
-    """
-    GM algo 回调。
-    """
-    if hasattr(context, "strategy"):
-        context.strategy.on_bar(context)
-
-
 def post_bar(bar: BarData, source: str) -> bool:
-    bar = normalize_bar(bar, source=source)
+    bar.source = source
     return module_engine.post_event(
         target="factor",
         event=EngineEvent(
@@ -173,84 +124,24 @@ def wait_module_idle(name: str) -> None:
         return
     node._queue.join()
 
-def run_db_replay(db_path: str | Path, frequency: str = DEFAULT_FREQUENCY, symbols: Optional[str] = None, start: Optional[str] = None, end: Optional[str] = None,) -> None:
-    setup_modules(frequency=frequency)
-    symbol_list = parse_symbols(symbols)
-
-    conn = sqlite3.connect(str(db_path))
-    conn.row_factory = sqlite3.Row
-
-    try:
-        sql, params = build_bar_query(frequency=frequency, symbols=symbol_list, start=start, end=end,)
-        count = 0
-
-        for row in conn.execute(sql, params):
-            bar = row_to_bar(row)
-            post_bar(bar, source=BarSource.SQLITE.value)
-
-        wait_module_idle("factor")
-        wait_module_idle("strategy")
-
-
-    finally:
-        conn.close()
-        module_engine.stop_all()
-
-
-def run_gm_local_replay(
-    symbols: str,
-    frequency: str = DEFAULT_FREQUENCY,
-    start: Optional[str] = None,
-    end: Optional[str] = None,
-    count: Optional[int] = None,
-) -> None:
-    """Replay downloaded GM bars through the normal module event pipeline."""
-    feed = GmLocalDataFeed(token=DEFAULT_GM_TOKEN)
-
-    if count is not None:
-        bars = feed.load_recent(
-            symbols=symbols,
-            frequency=frequency,
-            count=count,
-            end=end,
-        )
-    else:
-        if not start or not end:
-            raise ValueError("--gm-local requires --start and --end, or --count")
-        bars = feed.load_history(
-            symbols=symbols,
-            frequency=frequency,
-            start=start,
-            end=end,
-        )
-
-    setup_modules(frequency=frequency)
-    print_gm_local_summary(bars, frequency)
-
-    try:
-        for index, bar in enumerate(bars, start=1):
-            post_bar(bar, source=BarSource.GM_LOCAL.value)
-
-        wait_module_idle("factor")
-        wait_module_idle("strategy")
-    finally:
-        module_engine.stop_all()
-
-
-def run_gm_sqlite_replay(config: GmSqliteConfig) -> None:
-    """Stream GM yearly SQLite bars through the existing factor pipeline."""
+def run_parquet_replay(config: ParquetConfig, alphas=None) -> None:
+    """
+    将本地 Parquet 历史行情按时间顺序送入因子、策略事件处理流程。
+    每根 K 线作为 BAR 事件发送给因子模块，具体计算由模块按配置执行。
+    """
     started = time.perf_counter()
-    logger.info("[replay/start] source=gm_sqlite root=%s range=%s..%s frequency=%s symbols=%s",
-                config.root, config.start, config.end, config.frequency, config.symbols or "ALL")
-    feed = GmSqliteDataFeed(config.root)
-    setup_modules(frequency=config.frequency)
+    # 创建本地读取器，启动因子和策略模块，并解析股票代码筛选条件。
+    feed = ParquetDataFeed(config.root)
     symbols = parse_symbols(config.symbols)
+    setup_modules(frequency=config.frequency, alphas=alphas, universe=symbols or None)
+    # 记录回放的首尾行情、股票数量和累计条数，用于进度与完成日志。
     first_bar: BarData | None = None
     last_bar: BarData | None = None
     symbol_set: set[str] = set()
     count = 0
 
     try:
+        # 按日期、市场和代码筛选，迭代时按年份读取并按时间、代码顺序输出。
         bars = feed.iter_history(
             start=config.start,
             end=config.end,
@@ -262,11 +153,13 @@ def run_gm_sqlite_replay(config: GmSqliteConfig) -> None:
             allow_missing_years=config.allow_missing_years,
         )
         for bar in bars:
+            # 队列积压达到上限时暂停发送，每 5 毫秒检查一次，等待下游消化。
             while module_engine.queue_size("factor") >= config.max_inflight:
                 time.sleep(0.005)
 
-            if not post_bar(bar, source=BarSource.GM_SQLITE.value):
-                raise RuntimeError("factor queue rejected a GM SQLite bar")
+            # 将当前 K 线包装成 BAR 事件入队；因子计算在模块中异步执行。
+            if not post_bar(bar, source=BarSource.PARQUET.value):
+                raise RuntimeError("factor queue rejected a Parquet bar")
 
             count += 1
             first_bar = first_bar or bar
@@ -277,6 +170,7 @@ def run_gm_sqlite_replay(config: GmSqliteConfig) -> None:
                             count, len(symbol_set), bar.symbol, bar.bob,
                             module_engine.queue_size("factor"), time.perf_counter() - started)
 
+        # 文件读完不代表计算完成：先等因子处理完，再等其下游策略处理完。
         logger.info("[replay/drain] read complete bars=%d; waiting for factor/strategy queues", count)
         wait_module_idle("factor")
         wait_module_idle("strategy")
@@ -286,83 +180,14 @@ def run_gm_sqlite_replay(config: GmSqliteConfig) -> None:
         if not count:
             logger.warning("[replay/empty] no matching bars; check source directory, date range, symbols and filters")
     finally:
+        # 回放正常结束或处理中发生异常时，都关闭已启动的模块。
         module_engine.stop_all()
 
 
-def print_gm_local_summary(bars: List[BarData], frequency: str) -> None:
-    if not bars:
-        return
-
-    counts = Counter(bar.symbol for bar in bars)
-    symbol_counts = ", ".join(
-        f"{symbol}:{count}" for symbol, count in sorted(counts.items())
-    )
-    first_bob = min(bar.bob for bar in bars)
-    last_bob = max(bar.bob for bar in bars)
-
-
-
-def parse_symbols(symbols: Optional[str]) -> List[str]:
+def parse_symbols(symbols: str | None) -> list[str]:
     if not symbols:
         return []
-
     return [item.strip() for item in symbols.split(",") if item.strip()]
-
-
-def build_bar_query(frequency: str,  symbols: List[str], start: Optional[str], end: Optional[str],) -> tuple[str, list]:
-    params: list = [frequency]
-
-    if symbols:
-        placeholders = ",".join(["?"] * len(symbols))
-        sql += f" AND symbol IN ({placeholders})"
-        params.extend(symbols)
-
-    if start:
-        sql += " AND bob >= ?"
-        params.append(start)
-
-    if end:
-        sql += " AND bob <= ?"
-        params.append(end)
-
-    sql += " ORDER BY bob ASC, symbol ASC"
-
-    return sql, params
-
-
-def row_to_bar(row: sqlite3.Row) -> BarData:
-    return normalize_bar(dict(row),source=BarSource.SQLITE,)
-
-
-def parse_datetime(value) -> datetime:
-    if isinstance(value, datetime):
-        return value
-
-    return datetime.fromisoformat(str(value))
-
-def run_gm_backtest(config=None) -> None:
-    """
-    启动 GM 回测。
-    """
-    strategy_id = config.strategy_id if config else DEFAULT_STRATEGY_ID
-    start = config.start if config else DEFAULT_BACKTEST_START_TIME
-    end = config.end if config else DEFAULT_BACKTEST_END_TIME
-    initial_cash = config.initial_cash if config else DEFAULT_INITIAL_CASH
-    commission_ratio = config.commission_ratio if config else DEFAULT_COMMISSION_RATIO
-    slippage_ratio = config.slippage_ratio if config else DEFAULT_SLIPPAGE_RATIO
-
-    run(
-        strategy_id=strategy_id,
-        filename="main.py",
-        mode=MODE_BACKTEST,
-        token=DEFAULT_GM_TOKEN,
-        backtest_start_time=start,
-        backtest_end_time=end,
-        backtest_adjust=ADJUST_PREV,
-        backtest_initial_cash=initial_cash,
-        backtest_commission_ratio=commission_ratio,
-        backtest_slippage_ratio=slippage_ratio,
-    )
 
 
 def init_logger() -> None:
@@ -378,43 +203,37 @@ def init_logger() -> None:
 
 
 def run_from_config(config: RuntimeConfig) -> None:
-    if config.mode == RunMode.GM_LOCAL:
-        setting = config.gm_local
-        assert setting is not None
-        run_gm_local_replay(symbols=setting.symbols, frequency=setting.frequency, start=setting.start, end=setting.end, count=setting.count,)
+    """Run import, factor calculation, or replay from local Parquet files."""
+    if config.mode != RunMode.PARQUET:
+        raise ValueError("only local parquet mode is supported")
+    setting = config.parquet
+    raw_alphas = config.raw.get("alphas", [])
+    if not isinstance(raw_alphas, list):
+        raise ValueError("alphas must be a list of name/formula objects")
+    alpha_engine = None
+    if raw_alphas:
+        from vnpy.alpha import Alpha, AlphaEngine
+
+        # Parse and validate before starting a potentially expensive import.
+        alpha_engine = AlphaEngine([Alpha(**item) for item in raw_alphas])
+    import_options = config.raw.get("parquet_import", {})
+    if import_options.get("enabled", False):
+        from vnpy.factor.parquet_batch_runner import calculate_imported_alphas, import_parquet_history
+        snapshot = import_parquet_history(setting, import_options)
+        if alpha_engine is not None:
+            calculate_imported_alphas(snapshot, alpha_engine)
         return
 
-    if config.mode == RunMode.GM_SQLITE:
-        setting = config.gm_sqlite
-        assert setting is not None
-        alpha_options = config.raw.get("alpha101", {})
-        if alpha_options.get("enabled", False):
-            from vnpy.factor.sqlite_batch_runner import run_sqlite_alpha101
-            run_sqlite_alpha101(setting, alpha_options)
-            return
-        run_gm_sqlite_replay(setting)
-        return
-
-    if config.mode == RunMode.DATABASE:
-        setting = config.database
-        assert setting is not None
-        run_db_replay(db_path=setting.path, frequency=setting.frequency, symbols=setting.symbols, start=setting.start, end=setting.end,)
-        return
-
-    run_gm_backtest(config.gm_backtest)
+    if alpha_engine is not None and alpha_engine.requires_cross_section and not parse_symbols(setting.symbols):
+        raise ValueError("cross-sectional replay requires an explicit parquet.symbols universe")
+    run_parquet_replay(setting, alphas=raw_alphas)
 
 
 def main() -> None:
     init_logger()
     try:
-        logger.info("[main/start] config=%s", DEFAULT_RUNTIME_CONFIG)
         config = load_runtime_config(DEFAULT_RUNTIME_CONFIG)
-        logger.info("[main/config] mode=%s", config.mode.value)
         run_from_config(config)
-        logger.info("[main/complete] configured task finished")
-    except Exception:
-        logger.exception("[main/failed] configured task failed")
-        raise
     finally:
         shutdown_global_logger()
 

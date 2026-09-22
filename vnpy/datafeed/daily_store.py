@@ -3,13 +3,9 @@ from __future__ import annotations
 
 from datetime import date
 from pathlib import Path
-from time import perf_counter
 from uuid import uuid4
 
 import polars as pl
-
-from vnpy.alpha.logger import logger
-
 
 def atomic_parquet(frame: pl.DataFrame, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -22,7 +18,8 @@ def atomic_parquet(frame: pl.DataFrame, path: Path) -> None:
 
 
 class DailyMarketStore:
-    """One partition per date. Upsert replaces complete rows by symbol/date.
+    """
+    One partition per date. Upsert replaces complete rows by symbol/date.
 
     Input datetime denotes a trading DATE, not an intraday timestamp. Use one
     writer, and finish imports before posting MARKET_DATA_READY for that date.
@@ -33,8 +30,6 @@ class DailyMarketStore:
         self.root.mkdir(parents=True, exist_ok=True)
 
     def upsert(self, frame: pl.DataFrame) -> int:
-        started = perf_counter()
-        logger.info("[daily/write] start rows=%d root=%s", frame.height, self.root)
         required = {"datetime", "vt_symbol", "open", "high", "low", "close", "volume"}
         if missing := required - set(frame.columns):
             raise ValueError(f"daily input missing columns: {sorted(missing)}")
@@ -55,32 +50,24 @@ class DailyMarketStore:
                 partition = pl.concat([pl.read_parquet(path), partition], how="diagonal_relaxed")
             partition = partition.unique(["datetime", "vt_symbol"], keep="last").sort("vt_symbol")
             atomic_parquet(partition, path)
-        logger.info("[daily/write] complete rows=%d dates=%d elapsed=%.3fs root=%s",
-                    frame.height, frame["datetime"].n_unique(), perf_counter() - started, self.root)
         return frame.height
 
     def import_file(self, path: str | Path, batch_size: int = 100_000) -> int:
         """Stream CSV/Parquet row batches; never enqueue individual historical bars."""
-        import pandas as pd
-        import pyarrow.parquet as pq
-
         path = Path(path)
         if batch_size <= 0:
             raise ValueError("batch_size must be positive")
         if path.suffix.lower() == ".parquet":
-            frames = (pl.from_arrow(batch) for batch in pq.ParquetFile(path).iter_batches(batch_size=batch_size))
-        elif path.suffix.lower() == ".csv":
-            frames = (pl.from_pandas(batch) for batch in pd.read_csv(path, chunksize=batch_size))
-        else:
-            raise ValueError("daily import supports .csv and .parquet")
-        started = perf_counter()
-        logger.info("[daily/import] start source=%s batch_size=%d", path, batch_size)
-        total = 0
-        for number, frame in enumerate(frames, 1):
-            total += self.upsert(frame)
-            logger.info("[daily/import] batch=%d total_rows=%d", number, total)
-        logger.info("[daily/import] complete rows=%d elapsed=%.3fs", total, perf_counter() - started)
-        return total
+            import pyarrow.parquet as pq
+
+            with pq.ParquetFile(path) as file:
+                return sum(self.upsert(pl.from_arrow(batch)) for batch in file.iter_batches(batch_size=batch_size))
+        if path.suffix.lower() == ".csv":
+            import pandas as pd
+
+            with pd.read_csv(path, chunksize=batch_size) as batches:
+                return sum(self.upsert(pl.from_pandas(batch)) for batch in batches)
+        raise ValueError("daily import supports .csv and .parquet")
 
     def load_window(self, trade_date: str, history_dates: int = 320) -> pl.DataFrame:
         day = date.fromisoformat(trade_date)
@@ -91,9 +78,4 @@ class DailyMarketStore:
             raise ValueError(f"no daily partition for {day}")
         # Keep historical membership per date; do not filter history to today's universe.
         selected = files[-history_dates:]
-        started = perf_counter()
-        logger.info("[daily/load] start partitions=%d range=%s..%s", len(selected), selected[0].stem, selected[-1].stem)
-        frame = pl.concat([pl.read_parquet(path) for path in selected], how="diagonal_relaxed")
-        logger.info("[daily/load] complete rows=%d symbols=%d elapsed=%.3fs",
-                    frame.height, frame["vt_symbol"].n_unique(), perf_counter() - started)
-        return frame
+        return pl.concat([pl.read_parquet(path) for path in selected], how="diagonal_relaxed")

@@ -2,8 +2,7 @@
 
 from .runtime_config import (
     DEFAULT_RUNTIME_CONFIG,
-    GmLocalConfig,
-    GmSqliteConfig,
+    ParquetConfig,
     RunMode,
     RuntimeConfig,
     load_runtime_config,
@@ -11,8 +10,7 @@ from .runtime_config import (
 
 __all__ = [
     "DEFAULT_RUNTIME_CONFIG",
-    "GmLocalConfig",
-    "GmSqliteConfig",
+    "ParquetConfig",
     "RunMode",
     "RuntimeConfig",
     "load_runtime_config",

@@ -1,42 +1,20 @@
 {
-  "mode": "gm_sqlite",
-  "alpha101": {
-    "enabled": true,
-    "history_dates": 320,
-    "root": "data/main_alpha101"
+  "mode": "parquet",
+  "parquet_import": {
+    "enabled": false,
+    "root": "data/local_market"
   },
-  "gm_local": {
-    "symbols": "SHSE.600519,SHSE.600036,SHSE.600276,SHSE.601318,SHSE.600900",
+  "parquet": {
+    "root": "F:/Quantitative/parquet/basic_data/day_bar",
+    "symbols": "",
+    "markets": "SHSE,SZSE",
     "frequency": "1d",
-    "count": 2000,
-    "end": "2026-07-12 15:00:00"
-  },
-  "gm_sqlite": {
-    "root": "F:/Quantitative",
-    "symbols": "SHSE.600519,SHSE.600036,SHSE.600276,SHSE.601318,SHSE.600900",
-    "markets": "SHSE",
-    "frequency": "1d",
-    "start": "2018-01-01 00:00:00",
-    "end": "2026-07-10 23:59:59",
-    "skip_zero_volume": true,
-    "skip_invalid_ohlc": true,
-    "allow_missing_years": false,
+    "start": "2026-01-01 00:00:00",
+    "end": "2026-12-31 23:59:59",
+    "skip_zero_volume": false,
+    "skip_invalid_ohlc": false,
+    "allow_missing_years": true,
     "max_inflight": 5000,
     "progress_every": 1000
-  },
-  "database": {
-    "path": "data/gm_bars.db",
-    "frequency": "60s",
-    "symbols": "SHSE.600519,SHSE.600036,SHSE.600276,SHSE.601318,SHSE.600900",
-    "start": "2026-03-01 09:30:00",
-    "end": "2026-03-31 15:00:00"
-  },
-  "gm_backtest": {
-    "strategy_id": "a2c12b21-3191-11f1-9539-fa89d2391347",
-    "start": "2026-03-01 08:00:00",
-    "end": "2026-04-30 16:00:00",
-    "initial_cash": 10000000,
-    "commission_ratio": 0.0001,
-    "slippage_ratio": 0.0001
   }
 }

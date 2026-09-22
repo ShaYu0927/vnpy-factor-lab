@@ -37,3 +37,6 @@ venv/
 env/
 web/
 *.md
+!README.md
+!docs/alpha_mining_design.md
+!docs/code_framework_design.md

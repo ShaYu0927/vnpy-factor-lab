@@ -1,15 +1,13 @@
-"""Historical and local market-data adapters."""
+"""Local Parquet data, shared market bars, and in-memory history."""
 
 from .bar_cache import BarCache
-from .gm_local_datafeed import GmLocalDataFeed
-from .gm_sqlite_datafeed import GmSqliteDataFeed
+from .parquet_datafeed import ParquetDataFeed
 from .model import BarData, BarSource, MarketBar
 
 __all__ = [
     "BarCache",
     "BarData",
     "BarSource",
-    "GmLocalDataFeed",
-    "GmSqliteDataFeed",
+    "ParquetDataFeed",
     "MarketBar",
 ]
