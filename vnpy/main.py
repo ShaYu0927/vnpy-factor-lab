@@ -25,6 +25,8 @@ from vnpy.config.runtime_config import (
     load_runtime_config,
 )
 from vnpy.strategy.strategy_module import strategy_engine_module_entry
+from vnpy.alpha.alpha import Alpha
+from vnpy.alpha.engine import AlphaEngine
 
 
 module_engine = ModuleEngine()
@@ -203,7 +205,11 @@ def init_logger() -> None:
 
 
 def run_from_config(config: RuntimeConfig) -> None:
-    """Run import, factor calculation, or replay from local Parquet files."""
+    """根据配置执行 Parquet 导入、因子计算或历史数据回放。
+
+    启用 parquet_import 时，先导入数据；如果配置了因子，则在导入
+    完成后计算因子。未启用导入时，直接运行 Parquet 历史回放。
+    """
     if config.mode != RunMode.PARQUET:
         raise ValueError("only local parquet mode is supported")
     setting = config.parquet
@@ -212,9 +218,6 @@ def run_from_config(config: RuntimeConfig) -> None:
         raise ValueError("alphas must be a list of name/formula objects")
     alpha_engine = None
     if raw_alphas:
-        from vnpy.alpha import Alpha, AlphaEngine
-
-        # Parse and validate before starting a potentially expensive import.
         alpha_engine = AlphaEngine([Alpha(**item) for item in raw_alphas])
     import_options = config.raw.get("parquet_import", {})
     if import_options.get("enabled", False):

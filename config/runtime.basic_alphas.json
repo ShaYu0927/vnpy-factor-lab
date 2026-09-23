@@ -1,0 +1,28 @@
+{
+  "mode": "parquet",
+  "parquet_import": {
+    "enabled": false,
+    "root": "data/local_market"
+  },
+  "parquet": {
+    "root": "F:/Quantitative/parquet/basic_data/day_bar",
+    "symbols": "SHSE.600000",
+    "markets": "SHSE",
+    "frequency": "1d",
+    "start": "2026-01-01 00:00:00",
+    "end": "2026-03-31 23:59:59",
+    "skip_zero_volume": false,
+    "skip_invalid_ohlc": false,
+    "allow_missing_years": false,
+    "max_inflight": 5000,
+    "progress_every": 20
+  },
+  "alphas": [
+    {"name": "return_1", "formula": "close / Ref(close, 1) - 1"},
+    {"name": "momentum_5", "formula": "close / Ref(close, 5) - 1"},
+    {"name": "ma_bias_5", "formula": "close / Mean(close, 5) - 1"},
+    {"name": "volatility_5", "formula": "Std(close / Ref(close, 1) - 1, 5)"},
+    {"name": "volume_ratio_5", "formula": "volume / Mean(volume, 5)"},
+    {"name": "amplitude_1", "formula": "(high - low) / Ref(close, 1)"}
+  ]
+}
