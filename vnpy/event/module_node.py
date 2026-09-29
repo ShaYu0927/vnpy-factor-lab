@@ -1,5 +1,5 @@
 import atexit
-from queue import Queue, Empty
+from queue import Queue, Empty, Full
 from threading import Thread, Event
 from typing import Callable, Optional
 
@@ -56,6 +56,9 @@ class ModuleNode:
         self._thread: Optional[Thread] = None
 
         self._started = False
+        self.last_error: Exception | None = None
+        self.processed_events = 0
+        self.peak_queue_size = 0
 
     def start(self) -> bool:
         """
@@ -105,11 +108,12 @@ class ModuleNode:
         if _INTERPRETER_SHUTTING_DOWN:
             return False
 
-        if self._queue.full():
+        try:
+            self._queue.put_nowait(event)
+        except Full:
             print(f"[ModuleNode:{self.name}] queue full, "f"drop event_id={event.event_id}, event_type={event.event_type}")
             return False
-
-        self._queue.put(event)
+        self.peak_queue_size = max(self.peak_queue_size, self._queue.qsize())
         return True
 
     def queue_size(self) -> int:
@@ -144,7 +148,9 @@ class ModuleNode:
 
             try:
                 self.entry(self.context, event)
+                self.processed_events += 1
             except Exception as e:
+                self.last_error = e
                 print(
                     f"[ModuleNode:{self.name}] entry handle failed, "
                     f"event_id={event.event_id}, error={e}"

@@ -34,6 +34,7 @@ class ParquetConfig:
     allow_missing_years: bool = False  # 是否允许部分年份的数据文件缺失
     max_inflight: int = 5_000       # 同时在处理中的最大任务数
     progress_every: int = 10_000    # 每处理多少条记录报告一次进度
+    batch_size: int = 100          # 同一时间点每批处理的股票数量
 
 @dataclass(frozen=True)
 class RuntimeConfig:
@@ -42,6 +43,7 @@ class RuntimeConfig:
     mode: RunMode
     parquet: ParquetConfig
     raw: dict[str, Any] = field(default_factory=dict, repr=False)
+    config_dir: Path = field(default_factory=lambda: Path(__file__).resolve().parents[2] / "config", repr=False)
 
 
 def load_runtime_config(path: str | Path) -> RuntimeConfig:
@@ -63,6 +65,16 @@ def load_runtime_config(path: str | Path) -> RuntimeConfig:
 
     with config_path.open("r", encoding="utf-8") as file:
         raw = json.load(file)
+    if not isinstance(raw, dict):
+        raise ValueError("runtime config must be an object")
+    from vnpy.alpha.mining.config import runtime_iteration_config
+    runtime_iteration_config(raw.get("expression_iteration", {}), config_path.parent)
+    from vnpy.alpha.modeling.evaluation_config import parse_evaluation_config
+    parse_evaluation_config(raw.get("factor_evaluation", {}), config_path.parent)
+    from vnpy.factor.history_batch import parse_history_batch_config
+    batch = parse_history_batch_config(raw.get("history_batch", {}), config_path.parent)
+    if batch is not None and raw.get("parquet_import", {}).get("enabled", False):
+        raise ValueError("history_batch and parquet_import cannot both be enabled")
 
     try:
         mode = RunMode(raw["mode"])
@@ -84,6 +96,8 @@ def load_runtime_config(path: str | Path) -> RuntimeConfig:
             raise ValueError("parquet max_inflight must be greater than zero")
         if parquet.progress_every <= 0:
             raise ValueError("parquet progress_every must be greater than zero")
-        return RuntimeConfig(mode=mode, parquet=parquet, raw=raw)
+        if isinstance(parquet.batch_size, bool) or not isinstance(parquet.batch_size, int) or parquet.batch_size <= 0:
+            raise ValueError("parquet batch_size must be a positive integer")
+        return RuntimeConfig(mode=mode, parquet=parquet, raw=raw, config_dir=config_path.parent)
     except TypeError as exc:
         raise ValueError(f"invalid '{mode.value}' configuration: {exc}") from exc

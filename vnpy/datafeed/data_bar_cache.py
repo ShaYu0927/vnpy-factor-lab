@@ -1,15 +1,14 @@
 """Recent bars indexed by symbol and frequency for factor calculations."""
 from collections import defaultdict, deque
+from itertools import islice
 
-from vnpy.datafeed.model import BarData
+from vnpy.datafeed.data_model import BarData
 
 
 class BarCache:
     def __init__(self, maxlen: int = 1000):
         self.maxlen = maxlen
-        self._bars: dict[tuple[str, str], deque[BarData]] = defaultdict(
-            lambda: deque(maxlen=self.maxlen)
-        )
+        self._bars: dict[tuple[str, str], deque[BarData]] = defaultdict(lambda: deque(maxlen=self.maxlen))
 
     def update(self, bar: BarData) -> None:
         if bar is None or not bar.symbol:
@@ -23,8 +22,12 @@ class BarCache:
             bars.append(bar)
 
     def get_bars(self, symbol: str, count: int | None = None, frequency: str = "60s") -> list[BarData]:
-        bars = list(self._bars.get((symbol, frequency), ()))
-        return bars if count is None else bars[-count:]
+        bars = self._bars.get((symbol, frequency), ())
+        if count is None:
+            return list(bars)
+        if count <= 0:
+            return []
+        return list(reversed(list(islice(reversed(bars), count))))
 
     def get_last_bar(self, symbol: str, frequency: str = "60s") -> BarData | None:
         bars = self._bars.get((symbol, frequency))

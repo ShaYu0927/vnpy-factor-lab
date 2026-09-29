@@ -1,8 +1,10 @@
 # 项目代码框架设计
 
-状态：目标架构设计。标注“新增”的目录、类型和接口均未实现，不是当前可执行代码。
+状态：目标架构设计。2026-09-27 已实现 `alpha/mining` 的表达式随机生成子集，并通过 `mining/runtime.py` 接入原有 `main.py`：由运行配置驱动生成，合并固定公式后进入行情计算和策略事件链。`modeling/runtime_evaluation.py` 已接入后续 Alphalens 描述性评价、收益时间对齐和训练/留出边界剔除，尚不自动选择候选。下文目录、类型和接口仍表示完整目标，统一研究数据契约、搜索适应度和遗传进化等未实现部分不能作为当前可执行代码使用。
 
 本文确定整个量化工作流的代码边界；[Alpha 搜索设计](alpha_mining_design.md)补充搜索算法与评价细节。目录职责以本文为准：通用研究数据准备从原提案的 `mining/data.py` 提升到 `alpha/research/`，供搜索与后续训练共同使用。
+
+2026-09-29 已实现的行情生命周期：`datafeed/data_market_module.py` 注册为现有 `ModuleEngine` 的 `market` 模块，其 `ModuleContext.objects["market_store"]` 持有 `MarketDataStore` 和当前行情快照。研究轮次通过加载请求取得快照，相同请求跨轮次复用，显式刷新或切换范围时整体替换，应用退出时清空并注销。`datafeed/data_market_store.py` 中的 `MarketSnapshot` 是行情存储快照（ID、读取条件、行情表和加载耗时），尚不等同于下文计划中的完整研究数据契约；训练/验证切分和标签仍由研究层负责。
 
 ## 1. 架构总览
 
@@ -63,10 +65,12 @@ vnpy-master/
 │   ├── config/
 │   │   └── runtime_config.py        [扩展] 回放配置校验及因子库引用
 │   ├── datafeed/
-│   │   ├── model.py                 [已有] BarData
-│   │   ├── parquet_datafeed.py       [已有] 原始 Parquet 行情读取
-│   │   ├── daily_store.py           [已有] 本地日线快照存储
-│   │   └── bar_cache.py             [已有] 回放历史窗口缓存
+│   │   ├── data_model.py            [已有] BarData
+│   │   ├── data_parquet_feed.py     [已有] 原始 Parquet 行情读取
+│   │   ├── data_daily_store.py      [已有] 本地日线快照存储
+│   │   ├── data_bar_cache.py        [已有] 回放历史窗口缓存
+│   │   ├── data_market_module.py    [已有] 行情模块及生命周期
+│   │   └── data_market_store.py     [已有] 模块持有的行情快照
 │   ├── alpha/
 │   │   ├── alpha.py                 [已有] Alpha(name, formula)
 │   │   ├── engine.py                [已有] AlphaEngine、AlphaSample
@@ -85,7 +89,7 @@ vnpy-master/
 │   │   │   ├── labels.py            标签及实际收益起止时间
 │   │   │   └── split.py             日期切分、边界剔除、评价掩码
 │   │   ├── mining/                 [新增] 自动搜索表达式
-│   │   │   ├── __main__.py          搜索命令适配
+│   │   │   ├── runtime.py           主流程调用，生成候选并合并固定公式
 │   │   │   ├── config.py            SearchSpace、EvolutionConfig、SelectionConfig
 │   │   │   ├── schema.py            Candidate、FitnessResult、MiningResult
 │   │   │   ├── generator.py         生成合法树
@@ -230,7 +234,7 @@ BAR 默认只发给 factor，FACTOR 由 factor 发给 strategy。策略要直接
 
 ### 4.1 自动搜索入口
 
-拟新增 `python -m vnpy.alpha.mining config/mining.json`。入口做参数解析与装配，算法留在业务类中。
+自动搜索由 `vnpy/main.py` 的应用流程装配和调用，算法留在业务类中。当前表达式生成通过运行配置的 `expression_iteration` 段控制；以下为后续完整搜索的调用示意。
 
 ```python
 config = load_mining_config(path)

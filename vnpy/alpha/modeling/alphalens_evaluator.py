@@ -23,6 +23,7 @@ class AlphalensReport:
     quantile_returns: pd.DataFrame
     quantile_standard_error: pd.DataFrame
     turnover: dict[tuple[int, int], pd.Series]
+    ic_data: pd.DataFrame | None = None
 
 
 class AlphalensEvaluator:
@@ -61,7 +62,6 @@ class AlphalensEvaluator:
         if self.group_adjust and groups is None:
             raise ValueError("groups are required when group_adjust is enabled")
 
-        from alphalens import performance
         from alphalens.utils import get_clean_factor_and_forward_returns
 
         factor_series = self.prepare_factor(
@@ -87,22 +87,53 @@ class AlphalensEvaluator:
                 max_loss=self.max_loss,
                 groupby=None if groups is None else dict(groups),
             )
+        return self._evaluate_clean_data(clean_data)
+
+    def evaluate_forward_returns(
+        self, factor: pd.Series, forward_returns: pd.DataFrame,
+    ) -> AlphalensReport:
+        """Evaluate explicitly aligned labels, without price filling or return outlier filtering.
+
+        Caller removes insufficient/constant cross sections before calling. IC
+        uses every valid pair even when ties prevent quantile construction.
+        """
+        from alphalens.utils import get_clean_factor
+
+        pairs = forward_returns.replace([np.inf, -np.inf], np.nan).copy()
+        pairs["factor"] = self.prepare_factor(factor)
+        pairs = pairs.dropna().sort_index()
+        if pairs.empty:
+            raise ValueError("no valid factor/forward-return pairs")
+        if self.group_adjust:
+            raise ValueError("prealigned evaluation does not support group_adjust")
+        with redirect_stdout(StringIO()):
+            clean_data = get_clean_factor(
+                pairs["factor"], pairs.drop(columns="factor"),
+                quantiles=self.quantiles, max_loss=1.0,
+            )
+        return self._evaluate_clean_data(clean_data, ic_data=pairs)
+
+    def _evaluate_clean_data(
+        self, clean_data: pd.DataFrame, ic_data: pd.DataFrame | None = None,
+    ) -> AlphalensReport:
+        from alphalens import performance
+
+        ic_source = clean_data if ic_data is None else ic_data
         information_coefficient = performance.factor_information_coefficient(
-            clean_data,
+            ic_source,
             group_adjust=self.group_adjust,
         )
-        mean_ic = performance.mean_information_coefficient(
-            clean_data,
-            group_adjust=self.group_adjust,
-        )
+        mean_ic = information_coefficient.mean()
         ic_std = information_coefficient.std().replace(0.0, np.nan)
         information_ratio = information_coefficient.mean() / ic_std
-        quantile_returns, quantile_standard_error = performance.mean_return_by_quantile(
-            clean_data,
-            demeaned=True,
-            group_adjust=self.group_adjust,
-        )
-        turnover = self._calculate_turnover(clean_data)
+        if clean_data.empty:
+            quantile_returns = quantile_standard_error = pd.DataFrame()
+            turnover = {}
+        else:
+            quantile_returns, quantile_standard_error = performance.mean_return_by_quantile(
+                clean_data, demeaned=True, group_adjust=self.group_adjust,
+            )
+            turnover = self._calculate_turnover(clean_data)
         return AlphalensReport(
             clean_data=clean_data,
             information_coefficient=information_coefficient,
@@ -111,6 +142,7 @@ class AlphalensEvaluator:
             quantile_returns=quantile_returns,
             quantile_standard_error=quantile_standard_error,
             turnover=turnover,
+            ic_data=ic_source,
         )
 
     def create_full_tear_sheet(

@@ -189,7 +189,7 @@ def test_future_rows_do_not_change_past_results(frame):
 def test_import_entry_calculates_across_daily_partitions(frame, tmp_path, monkeypatch):
     from vnpy import main
     from vnpy.config.runtime_config import ParquetConfig, RunMode, RuntimeConfig
-    from vnpy.datafeed.daily_store import DailyMarketStore
+    from vnpy.datafeed.data_daily_store import DailyMarketStore
     from vnpy.factor import parquet_batch_runner
 
     store = DailyMarketStore(tmp_path / "snapshot")

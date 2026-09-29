@@ -6,8 +6,8 @@ from uuid import uuid4
 import polars as pl
 
 from vnpy.common.logger import get_logger
-from vnpy.datafeed.daily_store import DailyMarketStore, atomic_parquet
-from vnpy.datafeed.parquet_datafeed import ParquetDataFeed
+from vnpy.datafeed.data_daily_store import DailyMarketStore, atomic_parquet
+from vnpy.datafeed.data_parquet_feed import ParquetDataFeed
 
 
 def _resolve_output_root(options):

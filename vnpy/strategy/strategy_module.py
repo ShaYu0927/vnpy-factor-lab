@@ -23,6 +23,8 @@ class StrategyEngineModule(BaseModule):
             return
 
         engine.on_event(event)
+        if event.event_type == EventType.FACTOR:
+            self.set_state("received_samples", self.get_state("received_samples", 0) + 1)
         if engine.latest_outputs:
             output = engine.latest_outputs[-1]
             self.set_state("latest_output", output)

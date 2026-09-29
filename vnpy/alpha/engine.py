@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from math import isfinite
 from collections import defaultdict, deque
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Deque, Iterable, Mapping, Sequence
 
 import polars as pl
@@ -11,7 +12,7 @@ import polars as pl
 from .dataset.utility import calculate_by_expression
 from .definition import AlphaDefinition
 from .alpha import Alpha
-from .expression import CompiledExpression, PolarsCompiler, PolarsExecutor
+from .expression import PolarsCompiler, PolarsExecutor
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,12 +107,14 @@ class AlphaEngine:
         if set(names) & {"datetime", "vt_symbol"}:
             raise ValueError("alpha names must not shadow index columns")
         resolved: list[AlphaDefinition] = []
-        self._compiled: dict[str, CompiledExpression] = {}
+        trees = {}
         for item in definitions:
             if isinstance(item, Alpha):
                 try:
                     tree = item.parse()
-                    self._compiled[item.name] = PolarsCompiler().compile(tree)
+                    if not item.name.isidentifier():
+                        raise ValueError("alpha name must be an identifier")
+                    trees[item.name] = tree
                     resolved.append(AlphaDefinition.from_tree(item.name, tree))
                 except (TypeError, ValueError, KeyError) as exc:
                     raise ValueError(f"alpha {item.name!r}, formula {item.formula!r}: {exc}") from exc
@@ -119,6 +122,8 @@ class AlphaEngine:
                 resolved.append(item)
         # Freeze definitions at construction, including the inferred lookbacks.
         self.definitions = tuple(resolved)
+        self._input_definitions = tuple(definitions)
+        self._compiled_batch = PolarsCompiler().compile_many(trees) if trees else None
 
     @property
     def min_bars(self) -> int:
@@ -149,8 +154,8 @@ class AlphaEngine:
     """
     批量计算历史行情中的全部 Alpha 因子
 
-    输入数据经过主键检查和排序后，分别执行已经编译的新式
-    Alpha 表达式和兼容式 AlphaDefinition 表达式，最后按照 datetime、vt_symbol 合并所有因子结果。
+    输入数据经过主键检查和排序后，统一执行新式 Alpha 表达式的
+    共享计算计划，再按 datetime、vt_symbol 合并兼容式 AlphaDefinition 的结果。
 
     Args:
         frame: 包含 datetime、vt_symbol、close 以及因子所需
@@ -161,16 +166,42 @@ class AlphaEngine:
     """
     def calculate(self, frame: pl.DataFrame) -> pl.DataFrame:
         source = self._normalize_frame(frame)
-        result = source.select(["datetime", "vt_symbol"])
-        executor = PolarsExecutor(source) if self._compiled else None
+        return self._calculate_normalized(source)
+
+    def calculate_parallel(self, frame: pl.DataFrame, *, workers: int = 1) -> pl.DataFrame:
+        """Run formula groups concurrently against the same complete market table.
+
+        Each group retains all dates and symbols, including for nested time-series
+        and cross-sectional expressions. Threads share columnar input buffers;
+        Polars executes the native work. One worker keeps the shared expression
+        plan intact and still uses Polars' native thread pool.
+        """
+        if isinstance(workers, bool) or not isinstance(workers, int) or workers < 1:
+            raise ValueError("workers must be a positive integer")
+        source = self._normalize_frame(frame)
+        count = min(workers, len(self.definitions))
+        if count <= 1:
+            return self._calculate_normalized(source)
+        # Contiguous groups preserve configured factor order in the output.
+        size = (len(self.definitions) + count - 1) // count
+        engines = [AlphaEngine(self._input_definitions[i:i + size])
+                   for i in range(0, len(self.definitions), size)]
+        with ThreadPoolExecutor(max_workers=count, thread_name_prefix="alpha-batch") as pool:
+            results = list(pool.map(lambda engine: engine._calculate_normalized(source), engines))
+        # All groups use the same unique keys and deterministic output ordering.
+        return results[0].hstack([
+            column for result in results[1:] for column in result.drop("datetime", "vt_symbol")
+        ])
+
+    def _calculate_normalized(self, source: pl.DataFrame) -> pl.DataFrame:
+        batch = self._compiled_batch
+        result = PolarsExecutor.run_batch(source, batch) if batch else source.select(["datetime", "vt_symbol"])
         for definition in self.definitions:
-            if definition.name in self._compiled:
-                assert executor is not None
-                values = executor.run(self._compiled[definition.name], name=definition.name)
-            else:
-                values = calculate_by_expression(source, definition.expression).rename({"data": definition.name})
+            if batch and definition.name in batch.expressions:
+                continue
+            values = calculate_by_expression(source, definition.expression).rename({"data": definition.name})
             result = result.join(values, on=["datetime", "vt_symbol"], how="left")
-        return result.sort(["datetime", "vt_symbol"])
+        return result.select("datetime", "vt_symbol", *[item.name for item in self.definitions]).sort(["datetime", "vt_symbol"])
 
     """
     计算每只股票在指定时间或最新时间的因子快照。
@@ -180,18 +211,26 @@ class AlphaEngine:
         at: 指定计算时刻。为空时返回每只股票的最新结果。
 
     Returns:
-        因子完整且数值有效的 AlphaSample 列表。
+        必需因子完整且数值有效的 AlphaSample 列表；可选候选仅附加有效值。
     """
-    def calculate_latest(self, frame: pl.DataFrame, at: datetime | None = None) -> list[AlphaSample]:
+    def calculate_latest(
+        self, frame: pl.DataFrame, at: datetime | None = None,
+        *, optional_names: Sequence[str] = (),
+    ) -> list[AlphaSample]:
+        """Optional research candidates contribute finite values without blocking required factors."""
+        names = [item.name for item in self.definitions]
+        if set(optional_names) - set(names):
+            raise ValueError("optional alpha names must be registered definitions")
         source = self._normalize_frame(frame)
-        calculated = self.calculate(source)
-        return self._latest_samples(source, calculated, [item.name for item in self.definitions], at)
+        calculated = self._calculate_normalized(source)
+        return self._latest_samples(source, calculated, names, at, optional_names)
 
     """
     将因子计算结果转换为最新的 AlphaSample。
 
     每只股票只保留指定时刻或最新时刻的数据，并补充对应的
-    收盘价。任何因子为空、NaN 或无穷大的样本都会被跳过。
+    收盘价。必需因子为空、NaN 或无穷大时跳过样本；可选候选的
+    无效值仅从 features 中省略，不影响必需因子的输出。
 
     Args:
         source: 标准化后的原始行情。
@@ -202,7 +241,8 @@ class AlphaEngine:
     Returns:
         按股票代码排序的有效 AlphaSample 列表。
     """
-    def _latest_samples(self, source: pl.DataFrame, calculated: pl.DataFrame, names: Sequence[str], at: datetime | None,) -> list[AlphaSample]:
+    def _latest_samples(self, source: pl.DataFrame, calculated: pl.DataFrame, names: Sequence[str],
+                        at: datetime | None, optional_names: Sequence[str] = ()) -> list[AlphaSample]:
         if at is None:
             latest = calculated.group_by("vt_symbol").agg(pl.all().sort_by("datetime").last())
         else:
@@ -210,13 +250,14 @@ class AlphaEngine:
         closes = source.select(["datetime", "vt_symbol", "close"])
         latest = latest.join(closes, on=["datetime", "vt_symbol"], how="left")
         samples: list[AlphaSample] = []
+        required_names = set(names) - set(optional_names)
         for row in latest.iter_rows(named=True):
             features = {
                 name: float(row[name])
                 for name in names
                 if row.get(name) is not None and isfinite(float(row[name]))
             }
-            if len(features) != len(names):
+            if not required_names.issubset(features) or (optional_names and not features):
                 continue
             samples.append(AlphaSample(
                 symbol=str(row["vt_symbol"]), datetime=row["datetime"],

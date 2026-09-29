@@ -35,6 +35,28 @@ class Node(ABC):
             
     def __str__(self) -> str:
         return self.to_formula()
+    
+    def print_tree(self, indent: int = 0) -> None:
+        # 1. 确定当前节点显示的内容：
+        #    OperatorNode 显示 self.name
+        #    其他节点显示 self.to_formula()
+
+        # 2. 打印缩进和当前节点内容
+
+        # 3. 遍历 self.children
+        #    调用子节点的 print_tree(indent + 1)
+        
+        if isinstance(self, OperatorNode):
+            label = self.name
+        else:
+            label = self.to_formula()
+            
+        # 每深入一层，多缩进两个空格
+        print("  " * indent + label)
+        
+        # 递归打印子节点
+        for child in self.children:
+            child.print_tree((indent + 1))
 
 
 @dataclass(frozen=True, slots=True)

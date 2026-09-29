@@ -1,6 +1,6 @@
 # Alpha 自动搜索与行情回放设计
 
-状态：设计稿，新增模块及命令尚未实现。
+状态：整体方案仍为设计稿。已实现表达式随机生成、分批记录及主入口集成：`main.py` 根据运行配置生成候选，与固定公式合并后进入行情计算和事件回放。详见 README 的“第一阶段：表达式随机迭代”。训练评价、遗传进化与最终筛选尚未实现。
 
 全局目录、核心接口与模块依赖见 [项目代码框架设计](code_framework_design.md)。通用研究数据准备最终放在 `alpha/research/`，下文 `mining/data.py` 为早期职责划分，由该公共模块承接。
 
@@ -22,8 +22,8 @@
 
 | 现有位置 | 已有能力 | 设计中的用法 |
 | --- | --- | --- |
-| `vnpy/datafeed/parquet_datafeed.py` | 按条件读取历史 Bar | 统一行情入口 |
-| `vnpy/datafeed/daily_store.py` | 按日持久化行情 | 可选的研究快照存储 |
+| `vnpy/datafeed/data_parquet_feed.py` | 按条件读取历史 Bar | 统一行情入口 |
+| `vnpy/datafeed/data_daily_store.py` | 按日持久化行情 | 可选的研究快照存储 |
 | `vnpy/alpha/alpha.py` | Alpha 名称、公式及解析 | 保存和加载最终公式 |
 | `vnpy/alpha/expression/` | 树节点、算子注册、解析、分析和编译执行 | 搜索空间约束与计算语义 |
 | `vnpy/alpha/engine.py` | 批量计算、历史长度推断、最新样本 | 候选表达式与回放共用的计算引擎 |
@@ -33,7 +33,7 @@
 | `vnpy/factor/realtime_service.py` | Bar 缓存、就绪判断及 Alpha 调用 | 最终公式回放 |
 | `vnpy/main.py` | 导入或行情事件回放 | 保持为行情入口 |
 
-当前缺少搜索空间配置、随机树生成、种群管理、交叉变异、进化调度及搜索结果记录。配置中也没有已选 Alpha。
+当前已实现 `SearchSpace`、按签名随机树生成、跨批次结构去重、尝试预算和候选记录。主入口现可通过 `factor_evaluation` 在回放或导入后执行 Alphalens 描述性评价，独立保存收益标签、训练/留出统计及报告。搜索适应度、种群选优、交叉变异和进化调度仍未实现；生成记录保持未评价状态，另存的评价结果也不代表候选已获选。
 
 当前横截面回放要求明确的股票池，且池内各股最新 Bar 必须对齐。含缺失行情时不能直接假定它与离线横截面计算一致。
 
@@ -160,12 +160,12 @@ data/alpha_mining/<run_id>/
 
 ## 8. 建议代码组织与接口
 
-以下均为拟新增文件：
+以下为完整搜索的目标组织；`config.py`、`schema.py`、`generator.py`、`workflow.py` 和 `runtime.py` 目前仅实现表达式生成及主流程接入职责，其他职责仍待实现：
 
 ```text
 vnpy/alpha/mining/
   __init__.py
-  __main__.py      # 独立研究命令入口
+  runtime.py       # 由主流程调用，生成候选并合并固定公式
   config.py        # MiningConfig、SearchSpace 及校验
   schema.py        # Candidate、FitnessResult、MiningResult
   data.py          # 数据快照、标签时间、切分及评价掩码
@@ -187,7 +187,7 @@ result = MiningWorkflow(config).run()
 export_replay_alphas(result.selected, output_path)
 ```
 
-拟提供命令 `python -m vnpy.alpha.mining config/mining.json`，该命令目前不可执行。搜索配置独立于 `runtime.json`；行情回放继续使用现有入口。第一版将导出的 `alphas` 显式合入回放配置，后续再考虑文件引用支持。
+完整搜索配置尚未实现。表达式生成统一由 `vnpy/main.py` 调用，生成参数嵌入运行配置的 `expression_iteration` 段，生成结果在内存中自动与固定公式合并后进入回放或导入计算。`factor_evaluation` 控制后续 Alphalens 评价；当前仍不执行本文所述的适应度筛选与遗传进化。
 
 ## 9. 回放接入及性能边界
 

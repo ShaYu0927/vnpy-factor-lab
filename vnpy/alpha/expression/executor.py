@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import polars as pl
 
-from .polars_compiler import CompiledExpression
+from .polars_compiler import CompiledBatch, CompiledExpression
 
 
 class PolarsExecutor:
@@ -26,6 +26,37 @@ class PolarsExecutor:
         if frame.select(pl.struct("datetime", "vt_symbol").is_duplicated().any()).item():
             raise ValueError("alpha input contains duplicate datetime/symbol rows")
         self.frame = frame.sort(["vt_symbol", "datetime"])
+
+    @staticmethod
+    def run_batch(frame: pl.DataFrame, compiled: CompiledBatch) -> pl.DataFrame:
+        """Internal fast path: caller supplies validated, symbol/time-sorted data."""
+        if missing := compiled.fields - set(frame.columns):
+            raise ValueError(f"alpha input is missing columns: {', '.join(sorted(missing))}")
+        columns = ["datetime", "vt_symbol"] + sorted(compiled.fields - {"datetime", "vt_symbol"})
+        query = frame.select(columns).lazy()
+        # Independent stages share a with_columns call; dependent stages wait.
+        pending = []
+        pending_names = set()
+        for stage in compiled.stages:
+            if pending_names.intersection(stage.meta.root_names()):
+                query = query.with_columns(pending)
+                pending = []
+                pending_names = set()
+            pending.append(stage)
+            pending_names.add(stage.meta.output_name())
+        if pending:
+            query = query.with_columns(pending)
+        names = list(compiled.expressions)
+        return (
+            query.select("datetime", "vt_symbol", *(
+                expr.cast(pl.Float64).alias(name) for name, expr in compiled.expressions.items()
+            ))
+            .with_columns([
+                pl.when(pl.col(name).is_finite()).then(pl.col(name)).otherwise(None).alias(name)
+                for name in names
+            ])
+            .collect()
+        )
 
     def run(self, compiled: CompiledExpression, name: str = "data") -> pl.DataFrame:
         """计算因子并返回 datetime、vt_symbol 和因子值三列。

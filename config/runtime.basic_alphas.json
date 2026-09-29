@@ -1,12 +1,62 @@
 {
   "mode": "parquet",
+  "factor_evaluation": {
+    "enabled": true,
+    "periods": [1, 5, 10],
+    "entry_offset": 1,
+    "quantiles": 5,
+    "min_assets": 10,
+    "train_fraction": 0.7,
+    "output_root": "../data/alpha_evaluation"
+  },
+  "expression_iteration": {
+    "enabled": true,
+    "seed": 42,
+    "batches": 3,
+    "batch_size": 5,
+    "max_attempts_per_batch": 500,
+    "output_root": "../data/alpha_mining",
+    "search_space": {
+      "fields": [
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume"
+      ],
+      "operators": [
+        "add",
+        "sub",
+        "mul",
+        "div",
+        "Ref",
+        "Delta",
+        "Mean",
+        "Std"
+      ],
+      "constants": [
+        -1,
+        0,
+        1,
+        2
+      ],
+      "windows": [
+        1,
+        3,
+        5
+      ],
+      "max_depth": 4,
+      "max_nodes": 20,
+      "max_lookback": 20
+    }
+  },
   "parquet_import": {
     "enabled": false,
     "root": "data/local_market"
   },
   "parquet": {
     "root": "F:/Quantitative/parquet/basic_data/day_bar",
-    "symbols": "SHSE.600000",
+    "symbols": "SHSE.600000,SHSE.600004,SHSE.600006,SHSE.600007,SHSE.600008,SHSE.600009,SHSE.600010,SHSE.600011,SHSE.600012,SHSE.600015,SHSE.600016,SHSE.600017,SHSE.600018,SHSE.600019,SHSE.600020,SHSE.600021,SHSE.600022,SHSE.600023,SHSE.600025,SHSE.600026,SHSE.600027,SHSE.600028,SHSE.600029,SHSE.600030,SHSE.600031,SHSE.600032,SHSE.600033,SHSE.600035,SHSE.600036,SHSE.600037,SHSE.600038,SHSE.600039,SHSE.600048,SHSE.600050,SHSE.600051,SHSE.600052,SHSE.600053,SHSE.600054,SHSE.600055,SHSE.600056,SHSE.600057,SHSE.600058,SHSE.600059,SHSE.600060,SHSE.600061,SHSE.600062,SHSE.600063,SHSE.600064,SHSE.600066,SHSE.600067,SHSE.600071,SHSE.600072,SHSE.600073,SHSE.600075,SHSE.600076,SHSE.600078,SHSE.600079,SHSE.600080,SHSE.600081,SHSE.600082,SHSE.600084,SHSE.600085,SHSE.600088,SHSE.600089,SHSE.600094,SHSE.600095,SHSE.600096,SHSE.600097,SHSE.600098,SHSE.600099,SHSE.600100,SHSE.600101,SHSE.600103,SHSE.600104,SHSE.600105,SHSE.600106,SHSE.600107,SHSE.600108,SHSE.600109,SHSE.600110,SHSE.600111,SHSE.600113,SHSE.600114,SHSE.600115,SHSE.600116,SHSE.600117,SHSE.600118,SHSE.600119,SHSE.600120,SHSE.600121,SHSE.600123,SHSE.600125,SHSE.600126,SHSE.600127,SHSE.600128,SHSE.600129,SHSE.600130,SHSE.600131,SHSE.600132,SHSE.600133",
     "markets": "SHSE",
     "frequency": "1d",
     "start": "2026-01-01 00:00:00",
@@ -15,14 +65,33 @@
     "skip_invalid_ohlc": false,
     "allow_missing_years": false,
     "max_inflight": 5000,
-    "progress_every": 20
+    "progress_every": 1000,
+    "batch_size": 100
   },
   "alphas": [
-    {"name": "return_1", "formula": "close / Ref(close, 1) - 1"},
-    {"name": "momentum_5", "formula": "close / Ref(close, 5) - 1"},
-    {"name": "ma_bias_5", "formula": "close / Mean(close, 5) - 1"},
-    {"name": "volatility_5", "formula": "Std(close / Ref(close, 1) - 1, 5)"},
-    {"name": "volume_ratio_5", "formula": "volume / Mean(volume, 5)"},
-    {"name": "amplitude_1", "formula": "(high - low) / Ref(close, 1)"}
+    {
+      "name": "return_1",
+      "formula": "close / Ref(close, 1) - 1"
+    },
+    {
+      "name": "momentum_5",
+      "formula": "close / Ref(close, 5) - 1"
+    },
+    {
+      "name": "ma_bias_5",
+      "formula": "close / Mean(close, 5) - 1"
+    },
+    {
+      "name": "volatility_5",
+      "formula": "Std(close / Ref(close, 1) - 1, 5)"
+    },
+    {
+      "name": "volume_ratio_5",
+      "formula": "volume / Mean(volume, 5)"
+    },
+    {
+      "name": "amplitude_1",
+      "formula": "(high - low) / Ref(close, 1)"
+    }
   ]
 }
