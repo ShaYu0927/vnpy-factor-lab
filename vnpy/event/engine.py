@@ -98,7 +98,9 @@ class ModuleEngine:
             print(f"[ModuleEngine] unregister failed: module not found: {name}")
             return False
 
-        node.stop()
+        # 停止超时意味着业务线程仍在访问 context，不能提前清空或移除。
+        if not node.stop(close=True):
+            return False
         node.context.clear()
 
         removed_node = self._registry.unregister(name)

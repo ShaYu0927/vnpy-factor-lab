@@ -5,6 +5,8 @@ import time
 from pathlib import Path
 from itertools import groupby, islice
 
+import polars as pl
+
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -14,7 +16,7 @@ from vnpy.datafeed.data_parquet_feed import ParquetDataFeed
 from vnpy.datafeed.data_model import BarData, BarSource
 from vnpy.event.engine import ModuleEngine
 from vnpy.event.event import EngineEvent, EventType
-from vnpy.factor.realtime_module import factor_module_entry
+from vnpy.factor.factor_realtime_module import factor_module_entry
 from vnpy.config.runtime_config import (
     DEFAULT_FREQUENCY,
     DEFAULT_RUNTIME_CONFIG,
@@ -168,6 +170,21 @@ def run_parquet_replay(config: ParquetConfig, alphas=None, optional_alphas=()) -
                 for bar in batch:
                     bar.source = BarSource.PARQUET.value
                     symbol_set.add(bar.symbol)
+                if first_bar is None:
+                    # 回放不经过全局行情表；把首批 BAR 排成同样的列供检查。
+                    preview = pl.DataFrame([{
+                        "datetime": bar.bob,
+                        "vt_symbol": bar.symbol,
+                        "open": bar.open,
+                        "high": bar.high,
+                        "low": bar.low,
+                        "close": bar.close,
+                        "volume": bar.volume,
+                        "amount": bar.amount,
+                    } for bar in batch[:5]])
+                    with pl.Config(tbl_cols=-1, tbl_width_chars=180, fmt_str_lengths=28):
+                        display = str(preview)
+                    logger.info("[replay/market-preview] first %d BAR rows:\n%s", preview.height, display)
                 if not module_engine.post_event("factor", EngineEvent(
                     event_type=EventType.BAR, source=BarSource.PARQUET.value, data={"bars": batch},
                 )):
@@ -239,7 +256,7 @@ def run_from_config(config: RuntimeConfig) -> dict | None:
     if config.mode != RunMode.PARQUET:
         raise ValueError("only local parquet mode is supported")
     setting = config.parquet
-    from vnpy.factor.history_batch import parse_history_batch_config, run_history_batch
+    from vnpy.factor.factor_history_batch import parse_history_batch_config, run_history_batch
     batch_options = parse_history_batch_config(config.raw.get("history_batch", {}), config.config_dir)
     if batch_options is not None and config.raw.get("parquet_import", {}).get("enabled", False):
         raise ValueError("history_batch and parquet_import cannot both be enabled")
@@ -262,7 +279,7 @@ def run_from_config(config: RuntimeConfig) -> dict | None:
         return run_history_batch(config, batch_options, alpha_engine, raw_alphas,
                                  module_engine=module_engine, evaluation=evaluation)
     if import_options.get("enabled", False):
-        from vnpy.factor.parquet_batch_runner import calculate_imported_alphas, import_parquet_history
+        from vnpy.factor.factor_parquet_batch_runner import calculate_imported_alphas, import_parquet_history
         snapshot = import_parquet_history(setting, import_options)
         if alpha_engine is not None:
             calculate_imported_alphas(snapshot, alpha_engine)

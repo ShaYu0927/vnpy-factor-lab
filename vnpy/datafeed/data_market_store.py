@@ -55,26 +55,29 @@ class MarketLoadResult:
 class MarketDataStore:
     """持有一份当前行情快照，刷新成功后整体替换，失败时保留旧快照。
 
-    快照只包含行情。对外返回廉价的 DataFrame clone，共享底层列缓冲区，
+    快照只包含行情。对外返回廉价的 DataFrame clone, 共享底层列缓冲区
     同时避免调用方的列替换等原地操作修改模块持有的 DataFrame 对象。
     """
 
     def __init__(self) -> None:
         self._snapshot: MarketSnapshot | None = None
-        self._lock = RLock()
+        # 写入者串行化；读取快照不必等待磁盘 I/O。
+        self._load_lock = RLock()
+        self._snapshot_lock = RLock()
 
     def snapshot(self) -> MarketSnapshot:
-        with self._lock:
+        with self._snapshot_lock:
             if self._snapshot is None:
                 raise RuntimeError("market data has not been loaded")
             return replace(self._snapshot, frame=self._snapshot.frame.clone())
 
     def load(self, request: MarketDataRequest, *, reload: bool = False) -> MarketLoadResult:
-        # Serialize loads/clear, including direct service calls. Module requests
-        # normally already arrive on the market module's single event thread.
-        with self._lock:
-            if not reload and self._snapshot is not None and self._snapshot.request == request:
-                return MarketLoadResult(self.snapshot(), reused=True)
+        # 固定锁顺序：load_lock -> snapshot_lock；读者只获取后者。
+        with self._load_lock:
+            with self._snapshot_lock:
+                if not reload and self._snapshot is not None and self._snapshot.request == request:
+                    return MarketLoadResult(self.snapshot(), reused=True)
+            # 慢操作不持有快照锁，刷新期间读者仍可取得旧版本。
             started = perf_counter()
             frame = ParquetDataFeed(request.root).load_frame(
                 start=request.start, end=request.end, symbols=request.symbols,
@@ -89,10 +92,13 @@ class MarketDataStore:
                 raise ValueError("market input keys must not be null")
             if frame.select(pl.struct("datetime", "vt_symbol").is_duplicated().any()).item():
                 raise ValueError("market input contains duplicate datetime/symbol rows")
-            self._snapshot = MarketSnapshot(uuid4().hex, request, frame, perf_counter() - started)
-            return MarketLoadResult(self.snapshot(), reused=False)
+            with self._snapshot_lock:
+                self._snapshot = MarketSnapshot(uuid4().hex, request, frame, perf_counter() - started)
+                return MarketLoadResult(self.snapshot(), reused=False)
 
     def clear(self) -> None:
         """释放模块持有的引用；正在计算的调用方仍可使用其已取得的快照。"""
-        with self._lock:
-            self._snapshot = None
+        # 等待已开始的加载完成，再清空，避免清空后被旧加载重新填入。
+        with self._load_lock:
+            with self._snapshot_lock:
+                self._snapshot = None

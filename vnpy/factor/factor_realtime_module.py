@@ -4,7 +4,7 @@ from vnpy.alpha.alpha import Alpha
 from vnpy.alpha.engine import AlphaEngine, AlphaSampleCache
 from vnpy.event.base_module import BaseModule, make_module_entry
 from vnpy.event.event import EngineEvent, EventType
-from vnpy.factor.realtime_service import RealtimeAlphaService
+from vnpy.factor.factor_realtime_service import RealtimeAlphaService
 from vnpy.factor.core.factor_engine import FactorBatchResult
 from vnpy.alpha.logger import logger
 

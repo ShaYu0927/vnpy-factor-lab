@@ -48,8 +48,8 @@
 | [vnpy/datafeed/data_market_module.py](vnpy/datafeed/data_market_module.py) | 行情模块注册、加载请求、刷新、清空和注销 |
 | [vnpy/datafeed/data_market_store.py](vnpy/datafeed/data_market_store.py) | 持有当前行情快照，为不同计算轮次提供共享数据 |
 | [vnpy/datafeed/data_parquet_feed.py](vnpy/datafeed/data_parquet_feed.py) | Parquet 列式读取和逐条回放读取 |
-| [vnpy/factor/history_batch.py](vnpy/factor/history_batch.py) | 获取行情快照、批量计算、保存结果及可选评价 |
-| [vnpy/factor/realtime_service.py](vnpy/factor/realtime_service.py) | 行情缓存与回放因子计算 |
+| [vnpy/factor/factor_history_batch.py](vnpy/factor/factor_history_batch.py) | 获取行情快照、批量计算、保存结果及可选评价 |
+| [vnpy/factor/factor_realtime_service.py](vnpy/factor/factor_realtime_service.py) | 行情缓存与回放因子计算 |
 | [vnpy/quant/workflow.py](vnpy/quant/workflow.py) | 独立模型训练流程 |
 | [examples/alpha_formula_pipeline.py](examples/alpha_formula_pipeline.py) | 因子公式示例 |
 | [vnpy/alpha/mining/runtime.py](vnpy/alpha/mining/runtime.py) | 主流程生成候选、合并固定公式并传递给因子计算 |
@@ -100,12 +100,23 @@ flowchart TD
 
 同一应用内多次调用 `run_from_config()`，相同行情范围和过滤条件复用当前快照；更换公式或并发参数不会重新读盘。模块只持有一份当前快照，切换数据范围时成功加载后整体替换；失败会保留旧快照并将异常返回请求方。外部读取获得共享底层列缓冲区的 DataFrame clone，避免调用方原地改列影响模块数据，已取得的旧快照在刷新后仍可用于完成当前计算。
 
+**快照不是一条 K 线，而是一次加载得到的整张行情表。**一条日 K 线对应表中的一行，例如 `600000.SHSE` 在 `2026-03-30` 的开高低收、成交量等。假设加载了 100 只股票各 60 个交易日，快照就包含约 6000 行。下面只列出其中两行的收盘价作为示意：
+
+| 快照 | 日期 | 股票 | 收盘价 |
+| --- | --- | --- | ---: |
+| 旧版 A | 2026-03-30 | 600000.SHSE | 10.10 |
+| 旧版 A | 2026-03-31 | 600000.SHSE | 10.20 |
+| 新版 B | 2026-03-30 | 600000.SHSE | 10.10 |
+| 新版 B | 2026-03-31 | 600000.SHSE | 10.25 |
+
+任务甲先拿到 A，之后磁盘数据更新并刷新为 B：甲仍用 A 的 `10.20` 算完，新开始的任务乙用 B 的 `10.25`。刷新读盘期间，新任务仍可取得 A；B 加载成功后才替换模块当前持有的版本。旧任务未结束时，A 和 B 可能同时占内存。快照只在内存中保留这一版行情的引用，不等于另存一份磁盘备份。
+
 下面的片段用于同一应用运行期间，`config` 为已解析的运行配置，`alpha_engine` 为已经创建的因子引擎：
 
 ```python
 from vnpy.main import module_engine
 from vnpy.datafeed.data_market_module import (
-    get_market_store, load_market_snapshot, clear_market_data,
+    get_market_store, load_market_snapshot, clear_market_data, print_market_table,
 )
 
 # 已运行过一轮后，其他模块可直接取得仍驻留内存的行情。
@@ -114,9 +125,14 @@ factors = alpha_engine.calculate_parallel(snapshot.frame)
 
 # 磁盘文件更新后显式刷新；相同配置默认不会自动重读磁盘。
 load_market_snapshot(module_engine, config.parquet, reload=True)
+# 调试：将刷新后的整张表逐行写入 data/market_table.tsv。
+rows = print_market_table(module_engine, output_path="data/market_table.tsv")
+print(f"已输出 {rows} 行")
 # 需要释放行情而保留模块时显式清空。
 clear_market_data(module_engine)
 ```
+
+调试时可调用 `print_market_table(module_engine)`，逐行打印当前快照的全部行情；传入 `output_path` 可将全部行列写入制表符分隔文件，路径相对当前工作目录解析。此接口只读取已加载的快照，返回打印的行数，不会将 Polars 的表格显示截断当作完整结果。
 
 每轮批量函数返回后保留行情；`main()` 应用退出时通过 `unregister_market_module()` 排空请求、清空行情并注销模块。进程重启后重新加载。运行记录增加快照 ID、是否复用及原始加载耗时；`read_seconds` 现在包含请求等待时间，命中缓存时不代表发生了读盘。多轮计算仍各自保存因子和行情文件。
 

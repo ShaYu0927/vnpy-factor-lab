@@ -1,7 +1,14 @@
 """由全局 ModuleEngine 管理的行情模块，以及加载/刷新/清空请求接口。"""
 
-from concurrent.futures import Future
+import csv
+from concurrent.futures import Future, TimeoutError as FutureTimeoutError
+from contextlib import nullcontext
+from math import isfinite
+from pathlib import Path
+import sys
 from threading import RLock
+
+import polars as pl
 
 from vnpy.common.logger import get_logger
 from vnpy.config.runtime_config import ParquetConfig
@@ -12,6 +19,8 @@ from .data_market_store import MarketDataRequest, MarketDataStore, MarketLoadRes
 
 
 MARKET_MODULE = "market"
+DEFAULT_REQUEST_TIMEOUT = 300.0
+MARKET_PREVIEW_ROWS = 5
 _REGISTRATION_LOCK = RLock()
 
 
@@ -20,6 +29,9 @@ class MarketDataModule(BaseModule):
         if event.event_type not in (EventType.MARKET_LOAD_REQUEST, EventType.MARKET_CLEAR_REQUEST):
             return
         reply: Future = event.get("reply")
+        # 超时且尚未开始的请求会被取消，不能再执行其加载/清空操作。
+        if not reply.set_running_or_notify_cancel():
+            return
         try:
             store: MarketDataStore = self.get_object("market_store")
             if event.event_type == EventType.MARKET_CLEAR_REQUEST:
@@ -38,6 +50,15 @@ class MarketDataModule(BaseModule):
             self.set_state("error", None)
             self.set_state("load_count", self.get_state("load_count", 0) + int(not result.reused))
             self.set_state("reuse_count", self.get_state("reuse_count", 0) + int(result.reused))
+            if not result.reused:
+                frame = result.snapshot.frame
+                with pl.Config(tbl_cols=-1, tbl_width_chars=180, fmt_str_lengths=28):
+                    preview = str(frame.head(MARKET_PREVIEW_ROWS))
+                get_logger("market").info(
+                    "[market/table] snapshot=%s rows=%d columns=%d; first %d rows (sorted by symbol/time):\n%s",
+                    result.snapshot.snapshot_id, frame.height, frame.width,
+                    min(frame.height, MARKET_PREVIEW_ROWS), preview,
+                )
             reply.set_result(result)
         except Exception as exc:
             # A failed request must reach its caller without killing later retries.
@@ -72,7 +93,12 @@ def get_market_store(engine: ModuleEngine) -> MarketDataStore:
     return store
 
 
-def _request(engine: ModuleEngine, event_type: EventType, **data):
+def _request(engine: ModuleEngine, event_type: EventType, *, timeout: float = DEFAULT_REQUEST_TIMEOUT, **data):
+    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not isfinite(timeout) or timeout <= 0:
+        raise ValueError("market request timeout must be a positive finite number")
+    node = engine.get_module(MARKET_MODULE)
+    if node is not None and node.is_worker_thread():
+        raise RuntimeError("market worker cannot synchronously wait for its own queue")
     with _REGISTRATION_LOCK:
         register_market_module(engine)
         reply = Future()
@@ -81,28 +107,52 @@ def _request(engine: ModuleEngine, event_type: EventType, **data):
             data={**data, "reply": reply},
         )):
             raise RuntimeError("market module rejected request")
-    return reply.result()
+    try:
+        return reply.result(timeout=timeout)
+    except FutureTimeoutError:
+        # 业务函数自身也可能抛 TimeoutError；保留已完成请求的原始异常。
+        if reply.done():
+            return reply.result()
+        cancelled = reply.cancel()
+        detail = "cancelled before execution" if cancelled else "already running; it may still complete"
+        raise TimeoutError(f"market request timed out after {timeout}s ({detail})") from None
 
 
-def load_market_snapshot(
-    engine: ModuleEngine, config: ParquetConfig, *, reload: bool = False,
-) -> MarketLoadResult:
-    """向行情模块投递加载请求；同一范围复用，reload=True 强制读盘刷新。"""
-    return _request(engine, EventType.MARKET_LOAD_REQUEST,
-                    request=MarketDataRequest.from_config(config), reload=reload)
+def load_market_snapshot(engine: ModuleEngine, config: ParquetConfig, *, reload: bool = False, timeout: float = DEFAULT_REQUEST_TIMEOUT,) -> MarketLoadResult:
+    """向行情模块投递加载请求 timeout 限制等待回复时间，不中断已开始的 I/O。"""
+    return _request(engine, EventType.MARKET_LOAD_REQUEST,request=MarketDataRequest.from_config(config), reload=reload, timeout=timeout)
 
 
-def clear_market_data(engine: ModuleEngine) -> None:
-    """显式清空行情，保留模块供下一次加载。"""
-    _request(engine, EventType.MARKET_CLEAR_REQUEST)
+def clear_market_data(engine: ModuleEngine, *, timeout: float = DEFAULT_REQUEST_TIMEOUT) -> None:
+    """显式清空行情，保留模块供下一次加载"""
+    _request(engine, EventType.MARKET_CLEAR_REQUEST, timeout=timeout)
+
+
+def print_market_table(engine: ModuleEngine, *, output_path: str | Path | None = None) -> int:
+    """逐行打印当前全局行情快照的全部列和全部行；可写入 TSV 文件。
+
+    保留本次快照引用，刷新或清空不会让打印过程切换到另一版行情。
+    不依赖 Polars 的表格显示设置，因此不会省略中间行或列。
+    """
+    frame = get_market_store(engine).snapshot().frame
+    target = Path(output_path).expanduser() if output_path is not None else None
+    if target is not None:
+        target.parent.mkdir(parents=True, exist_ok=True)
+    destination = target.open("w", encoding="utf-8", newline="") if target is not None else nullcontext(sys.stdout)
+    with destination as stream:
+        writer = csv.writer(stream, dialect="excel-tab", lineterminator="\n")
+        writer.writerow(frame.columns)
+        writer.writerows(frame.iter_rows())
+    return frame.height
 
 
 def unregister_market_module(engine: ModuleEngine) -> None:
-    """应用退出时排空请求、清空行情并注销模块；不在计算轮次结束时调用。"""
+    """使排队请求失败，停止后清空并注销；停止超时则保留上下文供重试。"""
     with _REGISTRATION_LOCK:
         node = engine.get_module(MARKET_MODULE)
         if node is None:
             return
-        node._queue.join()
-        get_market_store(engine).clear()
-        engine.unregister_module(MARKET_MODULE)
+        store = get_market_store(engine)
+        if not engine.unregister_module(MARKET_MODULE):
+            raise RuntimeError("market module is still stopping; retry unregister after the active request finishes")
+        store.clear()

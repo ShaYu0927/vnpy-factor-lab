@@ -71,7 +71,7 @@ def load_runtime_config(path: str | Path) -> RuntimeConfig:
     runtime_iteration_config(raw.get("expression_iteration", {}), config_path.parent)
     from vnpy.alpha.modeling.evaluation_config import parse_evaluation_config
     parse_evaluation_config(raw.get("factor_evaluation", {}), config_path.parent)
-    from vnpy.factor.history_batch import parse_history_batch_config
+    from vnpy.factor.factor_history_batch import parse_history_batch_config
     batch = parse_history_batch_config(raw.get("history_batch", {}), config_path.parent)
     if batch is not None and raw.get("parquet_import", {}).get("enabled", False):
         raise ValueError("history_batch and parquet_import cannot both be enabled")
