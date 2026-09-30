@@ -49,9 +49,7 @@ class RealtimeAlphaService:
         self.optional_names = tuple(optional_names)
 
         # 可选因子必须已经注册到实际使用的引擎中。
-        if set(self.optional_names) - {
-            item.name for item in self.alpha_engine.definitions
-        }:
+        if set(self.optional_names) - {item.name for item in self.alpha_engine.definitions}:
             raise ValueError("optional alpha names must be registered definitions")
 
         # 取所有非可选因子的最大回看长度，作为最低历史数量要求。
@@ -75,7 +73,7 @@ class RealtimeAlphaService:
 
     def on_bar(self, bar) -> AlphaSample | None:
         """
-        接收单根 Bar，通过批量入口更新行情并计算因子。
+        接收单根 Bar 通过批量入口更新行情并计算因子。
 
         返回:
             当前股票的 Alpha 样本；没有生成对应结果时返回 None。
