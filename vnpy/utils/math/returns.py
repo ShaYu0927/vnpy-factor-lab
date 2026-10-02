@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import math
 
-from .common import MathCommon
+from .base import MathBase
 from .stat import StatMath
 
 
-class ReturnMath:
+class ReturnMath(MathBase):
     """
     收益率、动量、波动率相关公式
     """
@@ -18,12 +18,12 @@ class ReturnMath:
 
         ret = current / previous - 1
         """
-        if not MathCommon.is_valid(current) or not MathCommon.is_valid(previous):
+        if not ReturnMath.is_valid(current) or not ReturnMath.is_valid(previous):
             return default
 
         previous = float(previous)
 
-        if abs(previous) < MathCommon.EPSILON:
+        if abs(previous) < ReturnMath.EPSILON:
             return default
 
         return float(current) / previous - 1.0
@@ -35,7 +35,7 @@ class ReturnMath:
 
         ret = ln(current / previous)
         """
-        if not MathCommon.is_valid(current) or not MathCommon.is_valid(previous):
+        if not ReturnMath.is_valid(current) or not ReturnMath.is_valid(previous):
             return default
 
         current = float(current)
@@ -51,7 +51,7 @@ class ReturnMath:
         """
         普通收益率序列
         """
-        clean_values = MathCommon.clean(values)
+        clean_values = ReturnMath.clean(values)
 
         if len(clean_values) < 2:
             return []
@@ -70,7 +70,7 @@ class ReturnMath:
         """
         对数收益率序列
         """
-        clean_values = MathCommon.clean(values)
+        clean_values = ReturnMath.clean(values)
 
         if len(clean_values) < 2:
             return []
@@ -91,7 +91,7 @@ class ReturnMath:
 
         momentum = latest / previous - 1
         """
-        clean_values = MathCommon.clean(values)
+        clean_values = ReturnMath.clean(values)
 
         if len(clean_values) <= window:
             return default
@@ -108,7 +108,7 @@ class ReturnMath:
 
         默认使用普通收益率标准差。
         """
-        tail_values = MathCommon.tail(values, window + 1)
+        tail_values = ReturnMath.tail(values, window + 1)
 
         if len(tail_values) < window + 1:
             return default

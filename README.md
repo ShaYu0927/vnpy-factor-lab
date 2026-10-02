@@ -26,6 +26,7 @@
 | 未来收益标签与 Rank IC 评价 | 已接入主入口，调用 Alphalens，输出训练/留出分段报告 |
 | 行情事件回放 | 已验证 100 只股票真实行情、批量因子计算和策略模块接收事件 |
 | 回放因子与策略配置 | 默认加载 6 个基础因子公式，默认策略未激活 |
+| 生成因子转策略 | 因子值已能送达策略接口；候选筛选、交易规则和订单闭环尚未自动接入 |
 | 表达式随机迭代 | 主入口生成候选、计算及评价；尚不按评价结果自动筛选或进化 |
 | 交叉变异和进化搜索 | 已完成设计，尚未实现 |
 | 固定因子库导出与加载 | 已完成设计，尚未实现 |
@@ -54,6 +55,8 @@
 | [examples/alpha_formula_pipeline.py](examples/alpha_formula_pipeline.py) | 因子公式示例 |
 | [vnpy/alpha/mining/runtime.py](vnpy/alpha/mining/runtime.py) | 主流程生成候选、合并固定公式并传递给因子计算 |
 | [vnpy/alpha/modeling/runtime_evaluation.py](vnpy/alpha/modeling/runtime_evaluation.py) | 主流程评价、收益对齐、分段边界和报告保存 |
+| [vnpy/strategy/strategy_template.py](vnpy/strategy/strategy_template.py) | `on_factor()` 策略接口及信号、目标仓位输出约定 |
+| [vnpy/strategy/strategy_context.py](vnpy/strategy/strategy_context.py) | `StrategySignal` 与 `TargetPosition` 数据结构 |
 | [整个项目代码框架](docs/code_framework_design.md) | 目标目录、模块职责、核心对象与接口 |
 | [Alpha 自动搜索设计](docs/alpha_mining_design.md) | 搜索空间、进化、数据边界、评价与实施阶段 |
 
@@ -374,6 +377,55 @@ Rank IC 使用 Alphalens 的 Spearman 截面相关；先剔除股票不足、因
 
 本次 100 股票、56 个交易日的验证中，18 个公式可评价，3 个候选恒定；产生 162 条有效因子/周期/区间统计和 27 条跳过记录。留出起点为 2026-03-09，10 周期的留出 IC 只有 6 个有效日，不能据此确认稳定预测能力。
 
+## 从生成因子到策略
+
+因子表达式只定义数值如何计算，不能直接决定买卖。当前 `alphas.generated.json` 保存的是未筛选候选；`factor_evaluation` 输出描述性报告，不会自动选择候选或生成交易规则。要做可复现的策略实验，先在训练段根据覆盖率、Rank IC、稳定性及因子间相关性选定少量公式，用留出段检查，再将选定的 `name/formula` 固定到 [config/runtime.basic_alphas.json](config/runtime.basic_alphas.json) 的 `alphas` 中。若依据留出结果继续调参，还需另留独立测试数据。实验固定组合时可关闭 `expression_iteration.enabled`，避免每次回放又加入新候选。
+
+从选定因子到策略，需要明确因子方向、入场和退出条件、调仓时点、持仓数量或权重，以及交易成本。例如对 `momentum_5`，可以研究“超过阈值发出做多信号，低于退出阈值转为空仓”；阈值和持有规则须在训练数据上确定，再用未参与调整的数据检验。日线收盘后才能得到当日因子，回测成交时间应晚于该收盘时点，不能按同一根 K 线的收盘价成交。当前评价标签默认从下一交易日收盘价开始计算收益，这只是评价口径，不是已经实现的订单撮合规则。
+
+回放时，`RealtimeAlphaService` 把每只股票的因子名和值放在 `AlphaSample.features` 中，并通过 `FACTOR` 事件交给策略。新策略可继承 `StrategyTemplate`，在 `on_factor()` 中读取选定因子，缺失或非有限值时跳过，再返回 `StrategySignal`（方向）或 `TargetPosition`（目标权重）。下面用单阈值演示“因子值转信号”的接口；实际策略还需设计独立的退出条件、重复信号处理和仓位管理：
+
+```python
+import math
+
+from vnpy.strategy.strategy_context import SignalDirection, StrategySignal
+from vnpy.strategy.strategy_template import StrategyTemplate
+
+
+class SelectedAlphaStrategy(StrategyTemplate):
+    def on_init(self, context):
+        self.factor_name = str(self.setting["factor_name"])
+        self.threshold = float(self.setting["threshold"])
+
+    def on_factor(self, context, sample, factor_result=None):
+        value = sample.features.get(self.factor_name)
+        if value is None or not math.isfinite(value):
+            return []
+        return [StrategySignal(
+            strategy_name=self.strategy_name,
+            symbol=sample.symbol,
+            direction=SignalDirection.LONG if value >= self.threshold else SignalDirection.FLAT,
+            score=float(value),
+            reason=f"{self.factor_name}={value:.6f}",
+        )]
+```
+
+若把示例类保存为 `vnpy/strategy/selected_alpha_strategy.py`，可在 [vnpy/main.py](vnpy/main.py) 的 `register_strategy_module()` 中增加以下策略配置；代码示例尚未作为文件加入仓库：
+
+```python
+{
+    "name": "selected_alpha",
+    "class": "vnpy.strategy.selected_alpha_strategy.SelectedAlphaStrategy",
+    "active": True,
+    "factors": ["momentum_5"],
+    "setting": {"factor_name": "momentum_5", "threshold": 0.02},
+}
+```
+
+现有 `FactorSignalStrategy` 使用预设的样本字段，不会按新生成的因子名自动创建规则。每个 `FACTOR` 事件只包含一只股票；若策略要在同一时点做全股票排名，还需先收齐该时点的股票结果再调仓。
+
+当前主入口默认策略未激活，也未注册交易及订单模块。即使启用上述策略，现阶段也只能先验证信号输出；从信号到目标仓位、风控、下单、成交和计入成本的回测闭环仍需接入并验证。因子评价的 Rank IC 或分组收益不能代替策略回测收益。
+
 ## 后续：表达式树与遗传搜索
 
 表达式随机生成与分批记录已实现；基于得分的自动搜索尚未实现。后续将在生成器基础上增加训练集评价、交叉和变异，再复用现有计算引擎评价新公式。
@@ -401,6 +453,10 @@ Rank IC 使用 Alphalens 的 Spearman 截面相关；先剔除股票不足、因
 按现有设计，进化循环只使用训练集得分，验证集和测试集不反馈给交叉变异。Rank IC 等用于评价因子与未来收益的关系；相关性指标本身不等同于交易收益。当前已接入描述性评价和一次训练/留出分段，完整进化搜索及训练/验证/测试三段研究流程仍待实现。详细方案见 [Alpha 自动搜索设计](docs/alpha_mining_design.md)。
 
 ## 每日更新
+
+### 2026-10-02
+
+- README 补充从生成候选、评价并固定因子，到读取 `AlphaSample.features` 产生策略信号的接入步骤与接口示例；明确当前主入口尚未完成订单和成交闭环。本次仅修改文档。
 
 ### 2026-09-30
 

@@ -3,16 +3,16 @@ from __future__ import annotations
 import math
 from typing import Iterable
 
-from .common import MathCommon
+from .base import MathBase
 
 
-class StatMath:
+class StatMath(MathBase):
     """
     统计数学公式
     """
     @staticmethod
     def mean(values: Iterable[float | int | None], default: float = 0.0) -> float:
-        clean_values = MathCommon.clean(values)
+        clean_values = StatMath.clean(values)
 
         if not clean_values:
             return default
@@ -21,7 +21,7 @@ class StatMath:
 
     @staticmethod
     def variance(values: Iterable[float | int | None], ddof: int = 0, default: float = 0.0,) -> float:
-        clean_values = MathCommon.clean(values)
+        clean_values = StatMath.clean(values)
         n = len(clean_values)
 
         if n <= ddof:
@@ -42,7 +42,7 @@ class StatMath:
 
     @staticmethod
     def covariance(x_values: list[float | int | None], y_values: list[float | int | None], ddof: int = 0, default: float = 0.0,) -> float:
-        pairs = MathCommon.clean_pairs(x_values, y_values)
+        pairs = StatMath.clean_pairs(x_values, y_values)
         n = len(pairs)
 
         if n <= ddof:
@@ -61,7 +61,7 @@ class StatMath:
         """
         皮尔逊相关系数
         """
-        pairs = MathCommon.clean_pairs(x_values, y_values)
+        pairs = StatMath.clean_pairs(x_values, y_values)
 
         if len(pairs) < 2:
             return default
@@ -73,7 +73,7 @@ class StatMath:
         x_std = StatMath.std(xs)
         y_std = StatMath.std(ys)
 
-        return MathCommon.safe_div(cov, x_std * y_std, default=default)
+        return StatMath.safe_div(cov, x_std * y_std, default=default)
 
     @staticmethod
     def linear_slope(values: list[float | int | None], default: float = 0.0,) -> float:
@@ -82,7 +82,7 @@ class StatMath:
 
         x 默认使用 0, 1, 2, ..., n-1
         """
-        ys = MathCommon.clean(values)
+        ys = StatMath.clean(values)
         n = len(ys)
 
         if n < 2:
@@ -96,4 +96,4 @@ class StatMath:
         numerator = sum((x - x_mean) * (y - y_mean) for x, y in zip(xs, ys))
         denominator = sum((x - x_mean) ** 2 for x in xs)
 
-        return MathCommon.safe_div(numerator, denominator, default=default)
+        return StatMath.safe_div(numerator, denominator, default=default)
