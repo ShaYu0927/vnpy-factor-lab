@@ -40,9 +40,7 @@ class ExpressionParser:
         try:
             parsed = ast.parse(formula.strip(), mode="eval")
         except SyntaxError as exc:
-            raise ValueError(
-                f"invalid alpha formula at line {exc.lineno}, column {exc.offset}: {exc.msg}"
-            ) from exc
+            raise ValueError(f"invalid alpha formula at line {exc.lineno}, column {exc.offset}: {exc.msg}") from exc
         return self._convert(parsed.body)
 
     def _convert(self, node: ast.expr) -> Node:

@@ -25,10 +25,10 @@
 | Alpha 公式、表达式树、解析与计算 | 已有代码 |
 | 未来收益标签与 Rank IC 评价 | 已接入主入口，调用 Alphalens，输出训练/留出分段报告 |
 | 行情事件回放 | 已验证 100 只股票真实行情、批量因子计算和策略模块接收事件 |
-| 回放因子与策略配置 | 默认加载 6 个基础因子公式，默认策略未激活 |
+| 回放因子与策略配置 | 默认加载 6 个基础因子公式；策略模块保留接口，但不预置具体策略 |
 | 生成因子转策略 | 因子值已能送达策略接口；候选筛选、交易规则和订单闭环尚未自动接入 |
 | 表达式随机迭代 | 主入口生成候选、计算及评价；尚不按评价结果自动筛选或进化 |
-| 交叉变异和进化搜索 | 已完成设计，尚未实现 |
+| 交叉变异和进化搜索 | 独立研究入口已实现训练集 Rank IC 评分、选择、变异和交叉；1000 个候选的试运行已完成，尚未接入主入口或固定因子库 |
 | 固定因子库导出与加载 | 已完成设计，尚未实现 |
 | 模型训练 | 已有独立流程，尚未与自动搜索和回放完整衔接 |
 
@@ -171,7 +171,7 @@ vnpy/datafeed/
 
 启动前根据本机情况检查行情目录、实际可用日期和股票范围。依赖准备好后，使用项目 `.venv` 解释器，在 IDE 中直接运行 `vnpy/main.py`，无需命令行参数。
 
-当前已配置 6 个基础因子，并启用 `expression_iteration`，启动时生成 3 批、每批 5 个候选。两类公式自动合并后进入现有因子计算及策略事件链；默认策略未激活。真实行情读取、因子计算和策略模块接收事件已验证；策略信号及下单成交尚未验证。若使用横截面公式，现有回放还要求显式股票池及同一时点行情对齐。
+当前已配置 6 个基础因子，并启用 `expression_iteration`，启动时生成 3 批、每批 5 个候选。两类公式自动合并后进入现有因子计算及策略事件链；目前不预置具体策略。真实行情读取、因子计算和策略模块接收事件已验证；策略信号及下单成交尚未验证。若使用横截面公式，现有回放还要求显式股票池及同一时点行情对齐。
 
 ## 基础因子验证配置
 
@@ -188,7 +188,7 @@ vnpy/datafeed/
 | `volume_ratio_5` | `volume / Mean(volume, 5)` | 当前成交量与最近 5 根 K 线平均成交量的比值 |
 | `amplitude_1` | `(high - low) / Ref(close, 1)` | 当根高低价差与上一根收盘价的比值 |
 
-滚动均值包含当前 K 线，窗口按各股票的 K 线数量计数。整组固定公式至少需要 6 根 K 线，回放服务会先等待历史窗口满足再输出结果。公式均不需要横截面对齐。默认策略未激活；日志定期汇总处理进度，结束时报告行情数、样本数、耗时和队列峰值，不逐条打印。启用评价时，回放结束后另外保存完整研究因子表和评价报告。
+滚动均值包含当前 K 线，窗口按各股票的 K 线数量计数。整组固定公式至少需要 6 根 K 线，回放服务会先等待历史窗口满足再输出结果。公式均不需要横截面对齐。当前没有预置策略；日志定期汇总处理进度，结束时报告行情数、样本数、耗时和队列峰值，不逐条打印。启用评价时，回放结束后另外保存完整研究因子表和评价报告。
 
 因子模块中的行情缓存只保留公式最大回看窗口；策略样本缓存独立设置，默认每只股票 1000 条。多个新式公式编译成统一执行计划，相同窗口子表达式复用，按依赖顺序执行，减少逐因子 `collect` 和 `join`；兼容式公式仍走原有计算接口。计算使用 Polars 内部线程池。
 
@@ -285,7 +285,7 @@ StrategyEngineModule.handle() → StrategyEngine.on_event() → on_factor()
 
 两个模块通过各自的队列和线程处理事件。每批投递后，回放入口等待因子及策略队列处理完成，再发送下一批，保持时间顺序并限制积压；工作线程异常会传回调用者。每个 FACTOR 事件只携带对应股票的样本和因子结果，避免不同股票的值混入策略。单根行情的 `post_bar()` 和 `on_bar()` 接口仍可使用。
 
-当前已验证到策略引擎接收因子事件。具体策略只有启用且订阅匹配时才会执行 `strategy.on_factor()`；默认策略未启用，主入口也未注册交易和订单模块，因此尚未形成信号、下单、成交的完整闭环。
+当前已验证到策略引擎接收因子事件。仓库不再预置具体策略；后续注册的策略只有启用且订阅匹配时才会执行 `strategy.on_factor()`。主入口未注册交易和订单模块，因此尚未形成信号、下单、成交的完整闭环。
 
 ## 第一阶段：表达式随机迭代
 
@@ -383,52 +383,32 @@ Rank IC 使用 Alphalens 的 Spearman 截面相关；先剔除股票不足、因
 
 从选定因子到策略，需要明确因子方向、入场和退出条件、调仓时点、持仓数量或权重，以及交易成本。例如对 `momentum_5`，可以研究“超过阈值发出做多信号，低于退出阈值转为空仓”；阈值和持有规则须在训练数据上确定，再用未参与调整的数据检验。日线收盘后才能得到当日因子，回测成交时间应晚于该收盘时点，不能按同一根 K 线的收盘价成交。当前评价标签默认从下一交易日收盘价开始计算收益，这只是评价口径，不是已经实现的订单撮合规则。
 
-回放时，`RealtimeAlphaService` 把每只股票的因子名和值放在 `AlphaSample.features` 中，并通过 `FACTOR` 事件交给策略。新策略可继承 `StrategyTemplate`，在 `on_factor()` 中读取选定因子，缺失或非有限值时跳过，再返回 `StrategySignal`（方向）或 `TargetPosition`（目标权重）。下面用单阈值演示“因子值转信号”的接口；实际策略还需设计独立的退出条件、重复信号处理和仓位管理：
+回放时，`RealtimeAlphaService` 把每只股票的因子名和值放在 `AlphaSample.features` 中，并通过 `FACTOR` 事件交给策略模块。当前仓库不预置具体策略。将来确定经过验证的交易规则后，可继承 `StrategyTemplate`，在 `on_factor()` 中读取选定因子，返回 `StrategySignal`（方向）或 `TargetPosition`（目标权重），再通过 `register_strategy_module()` 注册。每个 `FACTOR` 事件只包含一只股票；若策略要在同一时点做全股票排名，还需先收齐该时点的股票结果再调仓。
 
-```python
-import math
-
-from vnpy.strategy.strategy_context import SignalDirection, StrategySignal
-from vnpy.strategy.strategy_template import StrategyTemplate
-
-
-class SelectedAlphaStrategy(StrategyTemplate):
-    def on_init(self, context):
-        self.factor_name = str(self.setting["factor_name"])
-        self.threshold = float(self.setting["threshold"])
-
-    def on_factor(self, context, sample, factor_result=None):
-        value = sample.features.get(self.factor_name)
-        if value is None or not math.isfinite(value):
-            return []
-        return [StrategySignal(
-            strategy_name=self.strategy_name,
-            symbol=sample.symbol,
-            direction=SignalDirection.LONG if value >= self.threshold else SignalDirection.FLAT,
-            score=float(value),
-            reason=f"{self.factor_name}={value:.6f}",
-        )]
-```
-
-若把示例类保存为 `vnpy/strategy/selected_alpha_strategy.py`，可在 [vnpy/main.py](vnpy/main.py) 的 `register_strategy_module()` 中增加以下策略配置；代码示例尚未作为文件加入仓库：
-
-```python
-{
-    "name": "selected_alpha",
-    "class": "vnpy.strategy.selected_alpha_strategy.SelectedAlphaStrategy",
-    "active": True,
-    "factors": ["momentum_5"],
-    "setting": {"factor_name": "momentum_5", "threshold": 0.02},
-}
-```
-
-现有 `FactorSignalStrategy` 使用预设的样本字段，不会按新生成的因子名自动创建规则。每个 `FACTOR` 事件只包含一只股票；若策略要在同一时点做全股票排名，还需先收齐该时点的股票结果再调仓。
-
-当前主入口默认策略未激活，也未注册交易及订单模块。即使启用上述策略，现阶段也只能先验证信号输出；从信号到目标仓位、风控、下单、成交和计入成本的回测闭环仍需接入并验证。因子评价的 Rank IC 或分组收益不能代替策略回测收益。
+当前主入口未注册交易及订单模块。从信号到目标仓位、风控、下单、成交和计入成本的回测闭环仍需接入并验证。因子评价的 Rank IC 或分组收益不能代替策略回测收益。
 
 ## 后续：表达式树与遗传搜索
 
-表达式随机生成与分批记录已实现；基于得分的自动搜索尚未实现。后续将在生成器基础上增加训练集评价、交叉和变异，再复用现有计算引擎评价新公式。
+随机表达式生成仍用于主入口的少量候选。遗传搜索的六个部件分别放在 `vnpy/alpha/mining/ga/` 下，`vnpy/alpha/mining/evolution.py` 只负责读取配置、启动搜索和保存结果：
+
+| 部件 | 职责 |
+| --- | --- |
+| `Population` (`ga/population.py`) | 保存一代个体、检查重复、选出精英并汇总分数 |
+| `FitnessEvaluator` (`ga/fitness.py`) | 计算每日 Rank IC、覆盖率、稳定性和树复杂度；只用训练集给进化评分 |
+| `Selector` (`ga/selector.py`) | 用锦标赛从当前种群挑选父代 |
+| `Crossover` (`ga/crossover.py`) | 从两个父代构造子树交叉的后代 |
+| `Mutator` (`ga/mutator.py`) | 修改字段、窗口、常数、算子或子树 |
+| `EvolutionEngine` (`ga/engine.py`) | 校验新树、去重、评分、保留精英并推进代际 |
+
+当前适应度以 `|平均 Rank IC| × 覆盖率` 为基础，稳定性提供有上限的加分，节点数带来小幅复杂度惩罚；有效 IC 日期不足时得分为零。这是可调整的初始评分规则，并非最终交易收益。每个新树都经过字段、深度、节点数、回看长度及编译校验，并按结构指纹去重。留出段只在进化结束后评价训练排名靠前的候选，不参与选亲。
+
+在项目目录运行下面的命令，默认用 `runtime.basic_alphas.json` 的 100 只股票和一季度行情，产生 11 代、每代 100 个体、保留 10 个精英，合计 1000 个**新候选**：
+
+```powershell
+python -m vnpy.alpha.mining.evolution --config config/runtime.basic_alphas.json --population 100 --generations 11
+```
+
+结果保存在 `data/alpha_mining/evolution/evolution_.../`：`candidates.jsonl` 包含公式、来源、父代和训练分数，`generations.jsonl` 记录每代进度，`holdout.json` 是前 20 个训练优胜候选的留出段结果，`alphas.top_train.json` 仅供人工研究。2026-10-08 框架重构后的本机试运行生成 1000 个不同结构的候选（随机 188、变异 503、交叉 309），910 个达到有效训练评分条件。当前样本仅 100 只股票、56 个交易日，留出段较短；结构去重也不等于经济含义去重，不能将训练排名视为可交易因子。
 
 | 操作 | 示例 |
 | --- | --- |
@@ -450,9 +430,19 @@ class SelectedAlphaStrategy(StrategyTemplate):
     → 保存因子库，供行情回放使用
 ```
 
-按现有设计，进化循环只使用训练集得分，验证集和测试集不反馈给交叉变异。Rank IC 等用于评价因子与未来收益的关系；相关性指标本身不等同于交易收益。当前已接入描述性评价和一次训练/留出分段，完整进化搜索及训练/验证/测试三段研究流程仍待实现。详细方案见 [Alpha 自动搜索设计](docs/alpha_mining_design.md)。
+进化循环只使用训练集得分，留出段不反馈给交叉变异。Rank IC 等用于评价因子与未来收益的关系；相关性指标本身不等同于交易收益。独立测试集、候选间相关性去重、价格复权核实、固定因子库及交易闭环仍待实现。
 
 ## 每日更新
+
+### 2026-10-11
+
+- 移除未使用的规则策略、调试策略、Alpha 示例策略及旧信号策略适配模块；清空主入口的默认策略配置，保留策略引擎、模板和信号接口，供后续接入经过验证的规则。
+- 同步更新 README 中的策略状态与接入说明。25 项相关测试通过，空策略模块可正常启动并接收因子事件。
+
+### 2026-10-08
+
+- 新增独立遗传搜索入口，并把 `Population`、`FitnessEvaluator`、`Selector`、`Crossover`、`Mutator`、`EvolutionEngine` 拆为独立模块。在默认 100 股票数据上生成并评分 1000 个不同结构的候选；训练集决定进化，留出段仅检查前 20 个。新增共享交易日历标签、训练边界、部件职责及后代唯一性测试，全部 32 项测试通过。
+- 下一步扩展研究区间与股票池，核实复权口径，并增加候选相关性去重和独立测试集；本次排名不自动进入策略。
 
 ### 2026-10-02
 

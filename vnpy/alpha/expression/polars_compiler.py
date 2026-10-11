@@ -31,10 +31,10 @@ class CompiledBatch:
 
 
 class PolarsCompiler:
-    """使用完整滚动窗口:Std 使用总体标准差(ddof=0)。"""
+    """使用完整滚动窗口:Std 使用总体标准差(ddof=0)"""
 
     def compile(self, tree: Node, available_fields: set[str] | None = None,) -> CompiledExpression:
-        """编译单棵表达树，返回最终表达式、中间阶段和分析结果。"""
+        """编译单棵表达树，返回最终表达式、中间阶段和分析结果"""
         analysis = ExpressionAnalyzer().analyze(tree, available_fields)
 
         # 复用批量编译逻辑，使用固定名称 data 取得编译结果。

@@ -84,31 +84,7 @@ def register_strategy_module() -> None:
     module_engine.register_module(
         name="strategy",
         entry=strategy_engine_module_entry,
-        config={
-            "strategies": [
-                {
-                    "name": "factor_signal",
-                    "class": "vnpy.strategy.factor_signal_strategy.FactorSignalStrategy",
-                    "active": False,
-                    "factors": [],
-                    "setting": {
-                        "enable_log": False,
-                        "enable_print": False,
-                    },
-                },
-                {
-                    "name": "factor_debug",
-                    "class": "vnpy.strategy.strategies.factor_debug.factor_debug_strategy.FactorDebugStrategy",
-                    "active": False,
-                    "factors": [],
-                    "setting": {
-                        "print_limit": 20,
-                        "print_factor_values": False,
-                        "max_factor_values": 10,
-                    },
-                },
-            ],
-        },
+        config={"strategies": []},
     )
 
 
