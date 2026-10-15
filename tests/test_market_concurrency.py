@@ -5,16 +5,16 @@ from threading import Event
 import polars as pl
 import pytest
 
-from vnpy.config.runtime_config import ParquetConfig
-from vnpy.datafeed.data_market_module import (
+from vnpy.config.config_runtime_config import ParquetConfig
+from vnpy.datafeed.datafeed_data_market_module import (
     clear_market_data, get_market_store, load_market_snapshot,
     register_market_module, unregister_market_module,
 )
-from vnpy.datafeed.data_market_store import MarketDataRequest, MarketDataStore
-from vnpy.datafeed.data_parquet_feed import ParquetDataFeed
-from vnpy.event.engine import ModuleEngine
-from vnpy.event.event import EngineEvent, EventType
-from vnpy.event.module_node import ModuleStoppedError
+from vnpy.datafeed.datafeed_data_market_store import MarketDataRequest, MarketDataStore
+from vnpy.datafeed.datafeed_data_parquet_feed import ParquetDataFeed
+from vnpy.event.event_engine import ModuleEngine
+from vnpy.event.event_event import EngineEvent, EventType
+from vnpy.event.event_module_node import ModuleStoppedError
 
 
 @pytest.fixture(autouse=True)

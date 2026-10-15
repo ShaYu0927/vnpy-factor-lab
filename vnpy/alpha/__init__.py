@@ -1,11 +1,15 @@
 from typing import Any
 
-from .logger import logger
+from .alpha_logger import logger
 
 
 __all__ = [
     "logger",
     "Alpha",
+    "MarketFrame",
+    "FactorFrame",
+    "SessionSplit",
+    "TimeSplitConfig",
     "AlphaDefinition",
     "AlphaEngine",
     "AlphaSample",
@@ -20,19 +24,28 @@ __all__ = [
     "ColumnReweighter",
     "AlphaStrategy",
     "BacktestingEngine",
-    "AlphaLab"
+    "AlphaLab",
 ]
 
 
 def __getattr__(name: str) -> Any:
     """Lazily import optional alpha components on first access."""
     if name == "Alpha":
-        from .alpha import Alpha
+        from .alpha_formula import Alpha
 
         values = {"Alpha": Alpha}
+    elif name in {"MarketFrame", "FactorFrame", "SessionSplit", "TimeSplitConfig"}:
+        from .alpha_domain import FactorFrame, MarketFrame, SessionSplit, TimeSplitConfig
+
+        values = {
+            "MarketFrame": MarketFrame,
+            "FactorFrame": FactorFrame,
+            "SessionSplit": SessionSplit,
+            "TimeSplitConfig": TimeSplitConfig,
+        }
     elif name in {"AlphaDefinition", "AlphaEngine", "AlphaSample", "AlphaSampleCache"}:
-        from .definition import AlphaDefinition
-        from .engine import AlphaEngine, AlphaSample, AlphaSampleCache
+        from .alpha_definition import AlphaDefinition
+        from .alpha_engine import AlphaEngine, AlphaSample, AlphaSampleCache
 
         values = {
             "AlphaDefinition": AlphaDefinition,
@@ -78,7 +91,7 @@ def __getattr__(name: str) -> Any:
             "BacktestingEngine": BacktestingEngine,
         }
     elif name == "AlphaLab":
-        from .lab import AlphaLab
+        from .alpha_lab import AlphaLab
 
         values = {"AlphaLab": AlphaLab}
     else:

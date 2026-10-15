@@ -5,12 +5,12 @@ import sys
 
 import polars as pl
 
-from vnpy.config.runtime_config import ParquetConfig
-from vnpy.datafeed.data_market_module import (
+from vnpy.config.config_runtime_config import ParquetConfig
+from vnpy.datafeed.datafeed_data_market_module import (
     load_market_snapshot, print_market_table, unregister_market_module,
 )
-from vnpy.datafeed.data_parquet_feed import ParquetDataFeed
-from vnpy.event.engine import ModuleEngine
+from vnpy.datafeed.datafeed_data_parquet_feed import ParquetDataFeed
+from vnpy.event.event_engine import ModuleEngine
 
 
 def test_print_market_table_outputs_every_row_and_column(tmp_path, monkeypatch):

@@ -5,9 +5,9 @@ from threading import Thread
 from time import sleep
 from typing import Any, Callable
 
-from .base_module import BaseModule, make_module_entry
-from .engine import ModuleEngine
-from .event import EngineEvent, EventType
+from .event_base_module import BaseModule, make_module_entry
+from .event_engine import ModuleEngine
+from .event_event import EngineEvent, EventType
 
 
 EVENT_TIMER = "eTimer"

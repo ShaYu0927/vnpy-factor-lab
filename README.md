@@ -4,6 +4,14 @@
 
 本文记录项目现状和每日更新。设计方案与已实现功能分别标明，更新按日期倒序排列。
 
+## 文件命名约定
+
+项目源码、配置和前端源码统一采用 `所在目录名_职责名.扩展名`，已有目录前缀不重复添加。例如 `event/event_engine.py`、`expression/expression_parser.py`、`config/config_runtime_basic_alphas.json` 和 `web/src/src_main.js`。
+
+Python 包入口使用 `__init__.py`；测试使用 `test_*.py`，测试配置使用 `conftest.py`。`pyproject.toml`、`package.json`、锁文件、Vite 的 `index.html`、`README.md` 和 `LICENSE` 使用对应工具的标准名称。依赖目录、缓存、日志、行情数据和构建产物采用各自工具生成的名称。
+
+应用入口为 `python vnpy/vnpy_main.py`，默认读取 `config/config_runtime_basic_alphas.json`。文件名规则由 `tests/test_project_naming.py` 检查，新增模块也应使用相同约定。
+
 ## 项目目标
 
 ```text
@@ -14,6 +22,27 @@
 ```
 
 模型训练是后续可选衔接环节。上述整体流程尚未全部实现。
+
+## 四个核心对象
+
+```mermaid
+flowchart LR
+    M[MarketFrame：观测行情] --> E[AlphaEngine：计算]
+    A[Alpha：名称与公式] --> E
+    E --> F[FactorFrame：因子结果]
+    M --> S[SessionSplit：交易日切分]
+    F --> R[研究评价]
+    S --> R
+```
+
+| 对象 | 固定约定 |
+| --- | --- |
+| `MarketFrame` | Polars 表；`datetime` 可为 `Date` 或 `Datetime`，`(datetime, vt_symbol)` 唯一且非空，`close` 为数值列；按股票、时间排序。缺失行情不补齐。 |
+| `Alpha` | 不可变的 `name + formula`；解析公式只返回表达树，不修改定义。 |
+| `FactorFrame` | Polars 表；使用相同主键，因子列为可空数值列；按时间、股票排序，可检查主键是否属于行情表。 |
+| `SessionSplit` | 基于行情表实际出现的交易日排序、去重，再用一个边界分出训练段和留出段。 |
+
+公开契约集中在 [vnpy/alpha/alpha_domain.py](vnpy/alpha/alpha_domain.py)。`AlphaEngine.calculate_factors(MarketFrame)` 返回 `FactorFrame`；旧的 `calculate(DataFrame)` 仍返回 Polars 表。收益标签、评分、策略信号属于后续阶段，不放进这四个对象。
 
 ## 当前状态
 
@@ -38,23 +67,23 @@
 
 | 入口 | 内容 |
 | --- | --- |
-| [vnpy/main.py](vnpy/main.py) | 统一应用入口，根据配置执行批量计算、导入或回放；直接运行默认进入回放 |
+| [vnpy/vnpy_main.py](vnpy/vnpy_main.py) | 统一应用入口，根据配置执行批量计算、导入或回放；直接运行默认进入回放 |
 | [examples/full_market_batch.py](examples/full_market_batch.py) | 全市场批量计算入口，可在 IDE 中直接运行 |
-| [config/runtime.full_market.json](config/runtime.full_market.json) | 沪深 2026 年全部已有行情、21 个公式、启用批量计算，默认关闭评价 |
-| [config/runtime.json](config/runtime.json) | 保留的原始行情回放配置，当前入口不默认加载 |
-| [config/runtime.basic_alphas.json](config/runtime.basic_alphas.json) | 当前默认配置：100 股票、6 个基础公式、15 个自动候选及 Alphalens 评价 |
-| [vnpy/alpha/alpha.py](vnpy/alpha/alpha.py) | Alpha 名称与公式定义 |
-| [vnpy/alpha/engine.py](vnpy/alpha/engine.py) | 统一因子计算引擎 |
+| [config/config_runtime_full_market.json](config/config_runtime_full_market.json) | 沪深 2026 年全部已有行情、21 个公式、启用批量计算，默认关闭评价 |
+| [config/config_runtime.json](config/config_runtime.json) | 保留的原始行情回放配置，当前入口不默认加载 |
+| [config/config_runtime_basic_alphas.json](config/config_runtime_basic_alphas.json) | 当前默认配置：100 股票、6 个基础公式、15 个自动候选及 Alphalens 评价 |
+| [vnpy/alpha/alpha_formula.py](vnpy/alpha/alpha_formula.py) | Alpha 名称与公式定义 |
+| [vnpy/alpha/alpha_engine.py](vnpy/alpha/alpha_engine.py) | 统一因子计算引擎 |
 | [vnpy/alpha/expression/](vnpy/alpha/expression/) | 表达式树、算子、解析、分析与执行 |
-| [vnpy/datafeed/data_market_module.py](vnpy/datafeed/data_market_module.py) | 行情模块注册、加载请求、刷新、清空和注销 |
-| [vnpy/datafeed/data_market_store.py](vnpy/datafeed/data_market_store.py) | 持有当前行情快照，为不同计算轮次提供共享数据 |
-| [vnpy/datafeed/data_parquet_feed.py](vnpy/datafeed/data_parquet_feed.py) | Parquet 列式读取和逐条回放读取 |
+| [vnpy/datafeed/datafeed_data_market_module.py](vnpy/datafeed/datafeed_data_market_module.py) | 行情模块注册、加载请求、刷新、清空和注销 |
+| [vnpy/datafeed/datafeed_data_market_store.py](vnpy/datafeed/datafeed_data_market_store.py) | 持有当前行情快照，为不同计算轮次提供共享数据 |
+| [vnpy/datafeed/datafeed_data_parquet_feed.py](vnpy/datafeed/datafeed_data_parquet_feed.py) | Parquet 列式读取和逐条回放读取 |
 | [vnpy/factor/factor_history_batch.py](vnpy/factor/factor_history_batch.py) | 获取行情快照、批量计算、保存结果及可选评价 |
 | [vnpy/factor/factor_realtime_service.py](vnpy/factor/factor_realtime_service.py) | 行情缓存与回放因子计算 |
 | [vnpy/quant/workflow.py](vnpy/quant/workflow.py) | 独立模型训练流程 |
 | [examples/alpha_formula_pipeline.py](examples/alpha_formula_pipeline.py) | 因子公式示例 |
-| [vnpy/alpha/mining/runtime.py](vnpy/alpha/mining/runtime.py) | 主流程生成候选、合并固定公式并传递给因子计算 |
-| [vnpy/alpha/modeling/runtime_evaluation.py](vnpy/alpha/modeling/runtime_evaluation.py) | 主流程评价、收益对齐、分段边界和报告保存 |
+| [vnpy/alpha/mining/mining_runtime.py](vnpy/alpha/mining/mining_runtime.py) | 主流程生成候选、合并固定公式并传递给因子计算 |
+| [vnpy/alpha/modeling/modeling_runtime_evaluation.py](vnpy/alpha/modeling/modeling_runtime_evaluation.py) | 主流程评价、收益对齐、分段边界和报告保存 |
 | [vnpy/strategy/strategy_template.py](vnpy/strategy/strategy_template.py) | `on_factor()` 策略接口及信号、目标仓位输出约定 |
 | [vnpy/strategy/strategy_context.py](vnpy/strategy/strategy_context.py) | `StrategySignal` 与 `TargetPosition` 数据结构 |
 | [整个项目代码框架](docs/code_framework_design.md) | 目标目录、模块职责、核心对象与接口 |
@@ -62,7 +91,7 @@
 
 ## 运行入口与配置
 
-全市场历史批量计算已提供独立入口：[examples/full_market_batch.py](examples/full_market_batch.py)。直接在 IDE 运行该文件，或在项目目录执行 `python examples/full_market_batch.py`，读取 [config/runtime.full_market.json](config/runtime.full_market.json)。原 `vnpy/main.py` 仍默认使用下面的 100 股票回放配置。
+全市场历史批量计算已提供独立入口：[examples/full_market_batch.py](examples/full_market_batch.py)。直接在 IDE 运行该文件，或在项目目录执行 `python examples/full_market_batch.py`，读取 [config/config_runtime_full_market.json](config/config_runtime_full_market.json)。原 `vnpy/vnpy_main.py` 仍默认使用下面的 100 股票回放配置。
 
 ### 全市场批量读取和并行计算
 
@@ -84,7 +113,7 @@
 
 ### 行情模块与数据流
 
-行情表由全局 `main.module_engine` 注册的独立 `market` 模块长期持有：`ModuleEngine → market ModuleContext → MarketDataStore → MarketSnapshot.frame`。模块实现见 [data_market_module.py](vnpy/datafeed/data_market_module.py)，快照管理见 [data_market_store.py](vnpy/datafeed/data_market_store.py)。批量函数通过 `MARKET_LOAD_REQUEST` 请求行情，读盘发生在 `Module-market` 线程；因子引擎使用模块提供的快照进行计算。
+行情表由全局 `main.module_engine` 注册的独立 `market` 模块长期持有：`ModuleEngine → market ModuleContext → MarketDataStore → MarketSnapshot.frame`。模块实现见 [datafeed_data_market_module.py](vnpy/datafeed/datafeed_data_market_module.py)，快照管理见 [datafeed_data_market_store.py](vnpy/datafeed/datafeed_data_market_store.py)。批量函数通过 `MARKET_LOAD_REQUEST` 请求行情，读盘发生在 `Module-market` 线程；因子引擎使用模块提供的快照进行计算。
 
 ```mermaid
 flowchart TD
@@ -117,8 +146,8 @@ flowchart TD
 下面的片段用于同一应用运行期间，`config` 为已解析的运行配置，`alpha_engine` 为已经创建的因子引擎：
 
 ```python
-from vnpy.main import module_engine
-from vnpy.datafeed.data_market_module import (
+from vnpy.vnpy_main import module_engine
+from vnpy.datafeed.datafeed_data_market_module import (
     get_market_store, load_market_snapshot, clear_market_data, print_market_table,
 )
 
@@ -139,17 +168,17 @@ clear_market_data(module_engine)
 
 每轮批量函数返回后保留行情；`main()` 应用退出时通过 `unregister_market_module()` 排空请求、清空行情并注销模块。进程重启后重新加载。运行记录增加快照 ID、是否复用及原始加载耗时；`read_seconds` 现在包含请求等待时间，命中缓存时不代表发生了读盘。多轮计算仍各自保存因子和行情文件。
 
-`datafeed` 的实现文件统一使用 `data_` 前缀，目录职责如下：
+`datafeed` 的实现文件统一使用 `datafeed_` 目录前缀，目录职责如下：
 
 ```text
 vnpy/datafeed/
 ├── __init__.py             包入口及公开类型导出
-├── data_model.py           行情对象和数据来源定义
-├── data_parquet_feed.py    Parquet 行情读取
-├── data_daily_store.py     按日持久化行情
-├── data_bar_cache.py       回放所需的历史 K 线窗口
-├── data_market_store.py    应用内持有的完整行情快照
-└── data_market_module.py   行情模块及生命周期管理
+├── datafeed_data_model.py           行情对象和数据来源定义
+├── datafeed_data_parquet_feed.py    Parquet 行情读取
+├── datafeed_data_daily_store.py     按日持久化行情
+├── datafeed_data_bar_cache.py       回放所需的历史 K 线窗口
+├── datafeed_data_market_store.py    应用内持有的完整行情快照
+└── datafeed_data_market_module.py   行情模块及生命周期管理
 ```
 
 ### 全市场验证结果
@@ -167,15 +196,15 @@ vnpy/datafeed/
 
 ### 100 标的行情回放
 
-当前默认加载 `config/runtime.basic_alphas.json`，使用 `mode = "parquet"`，并设置 `parquet_import.enabled = false`，因此进入行情回放分支。
+当前默认加载 `config/config_runtime_basic_alphas.json`，使用 `mode = "parquet"`，并设置 `parquet_import.enabled = false`，因此进入行情回放分支。
 
-启动前根据本机情况检查行情目录、实际可用日期和股票范围。依赖准备好后，使用项目 `.venv` 解释器，在 IDE 中直接运行 `vnpy/main.py`，无需命令行参数。
+启动前根据本机情况检查行情目录、实际可用日期和股票范围。依赖准备好后，使用项目 `.venv` 解释器，在 IDE 中直接运行 `vnpy/vnpy_main.py`，无需命令行参数。
 
 当前已配置 6 个基础因子，并启用 `expression_iteration`，启动时生成 3 批、每批 5 个候选。两类公式自动合并后进入现有因子计算及策略事件链；目前不预置具体策略。真实行情读取、因子计算和策略模块接收事件已验证；策略信号及下单成交尚未验证。若使用横截面公式，现有回放还要求显式股票池及同一时点行情对齐。
 
 ## 基础因子验证配置
 
-直接运行 `vnpy/main.py`，自动加载 [config/runtime.basic_alphas.json](config/runtime.basic_alphas.json)，执行表达式生成、合并及行情计算。把该配置的 `expression_iteration.enabled` 设为 `false` 可只验证下面 6 个固定公式。默认路径在 `vnpy/config/runtime_config.py` 的 `DEFAULT_RUNTIME_CONFIG` 中设置，按源码位置定位，不依赖 IDE 的工作目录。
+直接运行 `vnpy/vnpy_main.py`，自动加载 [config/config_runtime_basic_alphas.json](config/config_runtime_basic_alphas.json)，执行表达式生成、合并及行情计算。把该配置的 `expression_iteration.enabled` 设为 `false` 可只验证下面 6 个固定公式。默认路径在 `vnpy/config/config_runtime_config.py` 的 `DEFAULT_RUNTIME_CONFIG` 中设置，按源码位置定位，不依赖 IDE 的工作目录。
 
 默认配置读取 100 只沪市股票在 2026 年第一季度的日线，沿用本地行情目录。股票名单按代码排序，从该区间有完整 56 条记录的 `SHSE.600` 股票中选取前 100 只，仅用于运行验证。`parquet.batch_size = 100` 控制同一时刻每批最多计算的股票数；不足一批和日期切换时也会处理。缺少年度文件时直接报错。基础公式如下：
 
@@ -289,7 +318,7 @@ StrategyEngineModule.handle() → StrategyEngine.on_event() → on_factor()
 
 ## 第一阶段：表达式随机迭代
 
-直接在 IDE 中运行现有 [vnpy/main.py](vnpy/main.py)，无需额外入口或命令行参数。配置统一放在当前加载的 `config/runtime.basic_alphas.json`，顶层 `expression_iteration` 控制生成过程：
+直接在 IDE 中运行现有 [vnpy/vnpy_main.py](vnpy/vnpy_main.py)，无需额外入口或命令行参数。配置统一放在当前加载的 `config/config_runtime_basic_alphas.json`，顶层 `expression_iteration` 控制生成过程：
 
 ```json
 "expression_iteration": {
@@ -333,24 +362,26 @@ main → load_runtime_config → prepare_runtime_alphas
 | `batches.jsonl` | 每批生成数、尝试数、重复数和拒绝原因统计 |
 | `candidates.jsonl` | 表达式树、公式、哈希、批次、深度、节点数、依赖字段与历史窗口 |
 | `alphas.generated.json` | 可由现有 `Alpha` 加载的 `name/formula` 列表 |
-| `alphas.runtime.json` | 本次实际使用的固定公式与候选，以及可选候选名称；不包含行情配置 |
+| `alphas.config_runtime.json` | 本次实际使用的固定公式与候选，以及可选候选名称；不包含行情配置 |
 
 生成候选已参与行情计算，但不代表有效因子。固定公式保留完整性要求；候选只在值有效时加入因子样本，不会因长窗口或除零阻断固定公式。所有候选都无效且没有固定公式时不发送空样本。生成记录本身仍标记为未评价；开启 `factor_evaluation` 后另行保存本次评价记录，不修改生成历史，也不自动选择候选。
 
-表达式生成统一由 `vnpy/main.py` 调用，参数使用运行配置中的 `expression_iteration` 段，生成结果自动进入因子计算流程。
+表达式生成统一由 `vnpy/vnpy_main.py` 调用，参数使用运行配置中的 `expression_iteration` 段，生成结果自动进入因子计算流程。
 
 ## 因子预测能力评价
 
-仍直接运行 `vnpy/main.py`。默认运行配置已增加：
+仍直接运行 `vnpy/vnpy_main.py`。默认运行配置已增加：
 
 ```json
+"time_split": {
+  "train_fraction": 0.7
+},
 "factor_evaluation": {
   "enabled": true,
   "periods": [1, 5, 10],
   "entry_offset": 1,
   "quantiles": 5,
   "min_assets": 10,
-  "train_fraction": 0.7,
   "output_root": "../data/alpha_evaluation"
 }
 ```
@@ -359,7 +390,11 @@ main → load_runtime_config → prepare_runtime_alphas
 
 T 日收盘后得到因子，默认以 T+1 日收盘价进入，持有 p 个交易周期，标签为 `close[T+1+p] / close[T+1] - 1`。周期按全股票共享的已观测交易日序列计数；不填补缺失价格，不把零成交量或非正价格的端点当成有效买卖价格，不用未来收益的全样本统计量剔除异常收益。原行情是否复权尚未核实。
 
-按行情日期顺序取前 70% 为训练段，其余为留出段；训练样本的收益结束日期也必须早于留出起点，跨界样本剔除。每个预测周期独立处理尾部缺失标签，避免 10 周期缺失导致可计算的 1 周期数据一起丢失。另提供全部区间的描述性结果；不自动按这些结果挑选因子、训练模型或交易。
+遗传进化和报告统一读取顶层 `time_split.train_fraction`，并由 `vnpy/alpha/alpha_time_split.py` 生成交易日切分对象。先对配置股票池实际观测到的日期去重、排序，再按前 70% 为训练段、其余为留出段分配同日全部股票；不按股票记录行数切分。缺失个股价格不会改变该股票的标签日期，也不会填充。旧配置中的 `factor_evaluation.train_fraction` 仍可读取；若新旧设置同时存在且不一致，启动时报错。
+
+训练样本必须同时满足 `signal_date < holdout_start` 和 `label_end_date < holdout_start`，跨界样本剔除。每个预测周期独立处理尾部缺失标签，避免 10 周期缺失导致可计算的 1 周期数据一起丢失。另提供全部区间的描述性结果；不自动按这些结果挑选因子、训练模型或交易。当前采用一次固定切分，尚未执行多轮向前检验。
+
+报告显示训练/留出起止日期及行情天数，各持有期理论上最多可用的因子日期数，以及每个因子的可用标签天数、实际 IC 天数、每日参与股票数量范围。样本损失按“未来日期不足 → 收益跨界 → 端点价格无效 → 因子预热 → 因子无效值 → 截面不可评分”顺序统计，每条股票/日期记录只计一次；损失天数指该阶段整天都已没有剩余样本，部分股票缺失不算整天损失。恒定因子、恒定收益和股票不足的截面诊断可能重叠。
 
 Rank IC 使用 Alphalens 的 Spearman 截面相关；先剔除股票不足、因子恒定或收益恒定的截面。IC 使用全部有效配对，分位数分组失败不会让原本可计算的 IC 消失。报告单独显示分组覆盖率；Rank IC IR 未年化，分组收益是扣除同一截面平均收益后的持有期累计收益，尚未扣除交易成本。
 
@@ -374,12 +409,13 @@ Rank IC 使用 Alphalens 的 Spearman 截面相关；先剔除股票不足、因
 | `prices.parquet` / `factors.parquet` | 研究行情快照和全部因子值 |
 | `labels.parquet` | 未来收益及实际对应的进入/退出日期 |
 | `manifest.json` | 配置、公式、数据摘要、文件哈希、分段边界、依赖版本及运行状态 |
+| `split.json` | 完整交易日列表、训练/留出范围及交易日列表哈希，供复现和核对 |
 
 本次 100 股票、56 个交易日的验证中，18 个公式可评价，3 个候选恒定；产生 162 条有效因子/周期/区间统计和 27 条跳过记录。留出起点为 2026-03-09，10 周期的留出 IC 只有 6 个有效日，不能据此确认稳定预测能力。
 
 ## 从生成因子到策略
 
-因子表达式只定义数值如何计算，不能直接决定买卖。当前 `alphas.generated.json` 保存的是未筛选候选；`factor_evaluation` 输出描述性报告，不会自动选择候选或生成交易规则。要做可复现的策略实验，先在训练段根据覆盖率、Rank IC、稳定性及因子间相关性选定少量公式，用留出段检查，再将选定的 `name/formula` 固定到 [config/runtime.basic_alphas.json](config/runtime.basic_alphas.json) 的 `alphas` 中。若依据留出结果继续调参，还需另留独立测试数据。实验固定组合时可关闭 `expression_iteration.enabled`，避免每次回放又加入新候选。
+因子表达式只定义数值如何计算，不能直接决定买卖。当前 `alphas.generated.json` 保存的是未筛选候选；`factor_evaluation` 输出描述性报告，不会自动选择候选或生成交易规则。要做可复现的策略实验，先在训练段根据覆盖率、Rank IC、稳定性及因子间相关性选定少量公式，用留出段检查，再将选定的 `name/formula` 固定到 [config/config_runtime_basic_alphas.json](config/config_runtime_basic_alphas.json) 的 `alphas` 中。若依据留出结果继续调参，还需另留独立测试数据。实验固定组合时可关闭 `expression_iteration.enabled`，避免每次回放又加入新候选。
 
 从选定因子到策略，需要明确因子方向、入场和退出条件、调仓时点、持仓数量或权重，以及交易成本。例如对 `momentum_5`，可以研究“超过阈值发出做多信号，低于退出阈值转为空仓”；阈值和持有规则须在训练数据上确定，再用未参与调整的数据检验。日线收盘后才能得到当日因子，回测成交时间应晚于该收盘时点，不能按同一根 K 线的收盘价成交。当前评价标签默认从下一交易日收盘价开始计算收益，这只是评价口径，不是已经实现的订单撮合规则。
 
@@ -389,26 +425,28 @@ Rank IC 使用 Alphalens 的 Spearman 截面相关；先剔除股票不足、因
 
 ## 后续：表达式树与遗传搜索
 
-随机表达式生成仍用于主入口的少量候选。遗传搜索的六个部件分别放在 `vnpy/alpha/mining/ga/` 下，`vnpy/alpha/mining/evolution.py` 只负责读取配置、启动搜索和保存结果：
+随机表达式生成仍用于主入口的少量候选。遗传搜索的六个部件分别放在 `vnpy/alpha/mining/ga/` 下，`vnpy/alpha/mining/mining_evolution.py` 负责读取配置、启动搜索并在内存中返回结果：
 
 | 部件 | 职责 |
 | --- | --- |
-| `Population` (`ga/population.py`) | 保存一代个体、检查重复、选出精英并汇总分数 |
-| `FitnessEvaluator` (`ga/fitness.py`) | 计算每日 Rank IC、覆盖率、稳定性和树复杂度；只用训练集给进化评分 |
-| `Selector` (`ga/selector.py`) | 用锦标赛从当前种群挑选父代 |
-| `Crossover` (`ga/crossover.py`) | 从两个父代构造子树交叉的后代 |
-| `Mutator` (`ga/mutator.py`) | 修改字段、窗口、常数、算子或子树 |
-| `EvolutionEngine` (`ga/engine.py`) | 校验新树、去重、评分、保留精英并推进代际 |
+| `Population` (`ga/ga_population.py`) | 保存一代个体、检查重复、选出精英并汇总分数 |
+| `FitnessEvaluator` (`ga/ga_fitness.py`) | 计算每日 Rank IC、覆盖率、稳定性和树复杂度；只用训练集给进化评分 |
+| `Selector` (`ga/ga_selector.py`) | 用锦标赛从当前种群挑选父代 |
+| `Crossover` (`ga/ga_crossover.py`) | 从两个父代构造子树交叉的后代 |
+| `Mutator` (`ga/ga_mutator.py`) | 修改字段、窗口、常数、算子或子树 |
+| `EvolutionEngine` (`ga/ga_engine.py`) | 校验新树、去重、评分、保留精英并推进代际 |
 
 当前适应度以 `|平均 Rank IC| × 覆盖率` 为基础，稳定性提供有上限的加分，节点数带来小幅复杂度惩罚；有效 IC 日期不足时得分为零。这是可调整的初始评分规则，并非最终交易收益。每个新树都经过字段、深度、节点数、回看长度及编译校验，并按结构指纹去重。留出段只在进化结束后评价训练排名靠前的候选，不参与选亲。
 
-在项目目录运行下面的命令，默认用 `runtime.basic_alphas.json` 的 100 只股票和一季度行情，产生 11 代、每代 100 个体、保留 10 个精英，合计 1000 个**新候选**：
+第一代先读取运行配置的 `alphas` 作为种子原型：解析表达树，按 `search_space` 的字段、算子、窗口、常数、深度、节点数和回看长度校验并去重，再用训练段评分。仅 `outcome=scored` 的种子按训练分数准入；种子多于种群容量时保留分数最高的个体，同分保持配置顺序。余下名额由同样通过校验与训练评分的随机候选补齐。`run()` 返回的 `EvolutionResult` 包含种子准入明细、候选和留出段评分。现有基础配置的 `volatility_5` 表达树深度为 5，超过 `max_depth=4`，会被记录为未准入，除非调整搜索空间。
+
+在项目目录运行下面的命令，默认用 `config_runtime_basic_alphas.json` 的 100 只股票和一季度行情，产生 11 代、每代 100 个体、保留 10 个精英，合计 1000 个**新候选**：
 
 ```powershell
-python -m vnpy.alpha.mining.evolution --config config/runtime.basic_alphas.json --population 100 --generations 11
+python -m vnpy.alpha.mining.mining_evolution --config config/config_runtime_basic_alphas.json --population 100 --generations 11
 ```
 
-结果保存在 `data/alpha_mining/evolution/evolution_.../`：`candidates.jsonl` 包含公式、来源、父代和训练分数，`generations.jsonl` 记录每代进度，`holdout.json` 是前 20 个训练优胜候选的留出段结果，`alphas.top_train.json` 仅供人工研究。2026-10-08 框架重构后的本机试运行生成 1000 个不同结构的候选（随机 188、变异 503、交叉 309），910 个达到有效训练评分条件。当前样本仅 100 只股票、56 个交易日，留出段较短；结构去重也不等于经济含义去重，不能将训练排名视为可交易因子。
+命令行仅打印训练与留出交易日数、准入种子数、候选数和最高训练分数；遗传搜索不会创建结果目录或写入 JSON 文件。遗传进化使用同一个 `time_split.train_fraction`，训练和留出样本统计也与报告共用 `alpha_sample_diagnostics.py`。2026-10-08 框架重构后的本机试运行生成 1000 个不同结构的候选（随机 188、变异 503、交叉 309），910 个达到有效训练评分条件。当前样本仅 100 只股票、56 个交易日，留出段较短；结构去重也不等于经济含义去重，不能将训练排名视为可交易因子。
 
 | 操作 | 示例 |
 | --- | --- |
@@ -450,7 +488,7 @@ python -m vnpy.alpha.mining.evolution --config config/runtime.basic_alphas.json 
 
 ### 2026-09-30
 
-- 将 `datafeed` 实现文件统一命名为 `data_` 前缀，保留标准 `__init__.py`，同步更新代码、测试、示例及文档中的导入和路径。
+- 将 `datafeed` 实现文件统一命名为 `datafeed_` 前缀，保留标准 `__init__.py`，同步更新代码、测试、示例及文档中的导入和路径。
 - 更新当前状态和运行入口，补充独立行情模块的数据流、跨轮次快照持有与复用、刷新及退出释放规则，并列明各数据文件职责。
 - 命名调整后 136 项测试通过。本次 README 整理沿用 2026-09-29 的真实行情验证数据，区分计算耗时、快照复用耗时与表内存估算，不新增性能测试结论。
 
@@ -463,14 +501,14 @@ python -m vnpy.alpha.mining.evolution --config config/runtime.basic_alphas.json 
 - 共 126 项测试通过，新增覆盖跨年读取、源过滤一致、缺失行情、嵌套截面/时序算子、并行结果一致、异常反馈、配置校验和评价结果复用。
 - 本机沪深文件 2026 年第一季度包含 8293 个标的、56 个交易日、460370 行；21 个公式与独立逐因子计算一致，列式行情与原逐条读取后转换的行情一致。
 - 三次本机测量：列式读取中位数 0.119 秒；全部公式计算使用 1/2/4 个任务组的中位数分别为 0.356/0.442/0.520 秒。原对象读取加行情表转换单次 8.884 秒。默认选择 1 个任务组，保留共享表达式计划，实际由 Polars 1.40.1 内部 16 线程并行执行。
-- 上述耗时可能受操作系统缓存影响，不含进程启动、结果写盘或评价，不代表所有区间与机器的表现。完整测量记录在 `data/validation/history_batch.json`，复验脚本在 `data/validation/validate_history_batch.py`。
+- 上述耗时可能受操作系统缓存影响，不含进程启动、结果写盘或评价，不代表所有区间与机器的表现。完整测量记录在 `data/validation/history_batch.json`，复验脚本在 `data/validation/validation_validate_history_batch.py`。
 
 ### 2026-09-27
 
 **已完成**
 
 - 新增 `alpha/mining` 第一阶段表达式随机迭代：搜索空间校验、按算子签名生成合法树、深度/节点预算、历史窗口限制、编译校验和跨批次结构去重。
-- 将生成器接入现有 `main.py`，由运行配置控制生成与合并，自动进入导入计算或 `BAR → FACTOR → strategy` 回放链；默认 6 个固定公式加 15 个候选。
+- 将生成器接入现有 `vnpy_main.py`，由运行配置控制生成与合并，自动进入导入计算或 `BAR → FACTOR → strategy` 回放链；默认 6 个固定公式加 15 个候选。
 - 增加可选候选语义，候选无效值不阻断固定公式；修复时序因子多股票重复发布，以及同一进程重复运行保留旧公式和缓存的问题。
 - 为生成尝试设置上限，保存部分结果并明确区分完成、预算耗尽和失败状态。
 - 将同一时刻的多股票行情合批，合并因子执行计划并复用窗口子表达式；按回看窗口读取和缓存行情，关闭逐条打印。
@@ -484,7 +522,7 @@ python -m vnpy.alpha.mining.evolution --config config/runtime.basic_alphas.json 
 - 与独立逐因子执行逐项比较，106832 个有效值在相对误差 `1e-7`、绝对误差 `1e-9` 内一致。500 条窗口预热、3 条 `SHSE.600058` 的必需成交量比值无效，均按原有规则不输出样本。
 - 同一 100 股票快照的 3 次计算耗时中位数：逐股票/逐因子参考实现 2.431 秒，批量实现 0.017 秒。这是快照计算对比，不代表整段回放加速倍数。本机 Polars 1.40.1、16 个计算线程；详细结果在 `data/validation/replay_100_stocks.json`。
 - 新增评价专项验证：次日进入、缺失价格不填补、长短周期独立样本、训练边界不读取留出价格、正负 Rank IC、常数和无效因子、分位数失败、回放及导入接入、不依赖策略缓存、配置相对路径。真实 21 公式评价产出 162 条有效统计和 27 条常数跳过记录。
-- 按用户运行方式从 `vnpy/` 目录执行 `python main.py`，真实评价约 19.49 秒；14879 个收益标签与实际端点价格核对通过，4770 个每日 Rank IC 与 SciPy 独立计算一致。HTML 脚本语法检查通过，内置浏览器连接不可用，页面交互尚未实测。
+- 按用户运行方式从 `vnpy/` 目录执行 `python vnpy_main.py`，真实评价约 19.49 秒；14879 个收益标签与实际端点价格核对通过，4770 个每日 Rank IC 与 SciPy 独立计算一致。HTML 脚本语法检查通过，内置浏览器连接不可用，页面交互尚未实测。
 - 尚未接入自动筛选及交叉变异；评价与生成记录分开保存。默认策略未激活，未验证下单成交。
 
 **下一步**
@@ -512,9 +550,9 @@ python -m vnpy.alpha.mining.evolution --config config/runtime.basic_alphas.json 
 
 **已完成**
 
-- 新建 `config/runtime.basic_alphas.json`，配置单股票、小时间范围和 6 个基础因子公式。
-- 默认配置路径指向 `config/runtime.basic_alphas.json`，直接运行 `main.py` 即可加载，无需命令行参数。
-- `main.py` 直接从定义文件导入 `Alpha` 和 `AlphaEngine`，便于 IDE 静态定位定义。
+- 新建 `config/config_runtime_basic_alphas.json`，配置单股票、小时间范围和 6 个基础因子公式。
+- 默认配置路径指向 `config/config_runtime_basic_alphas.json`，直接运行 `vnpy_main.py` 即可加载，无需命令行参数。
+- `vnpy_main.py` 直接从定义文件导入 `Alpha` 和 `AlphaEngine`，便于 IDE 静态定位定义。
 - 确认 Alpha 加载流程后，移除临时配置及因子加载日志，保留原有加载逻辑。
 - 补充 IDE 启动方式、公式含义及历史窗口说明。
 
@@ -536,7 +574,7 @@ python -m vnpy.alpha.mining.evolution --config config/runtime.basic_alphas.json 
 **已完成**
 
 - 梳理当前启动入口、Parquet 行情读取、因子计算与策略事件路径。
-- 将 `config/runtime.json` 中的 `parquet_import.enabled` 改为 `false`，默认走行情回放。
+- 将 `config/config_runtime.json` 中的 `parquet_import.enabled` 改为 `false`，默认走行情回放。
 - 明确因子表达式通过顶层 `alphas` 配置，并梳理 `BAR → RealtimeAlphaService → AlphaEngine → FACTOR → 策略` 调用链。
 - 新增 [Alpha 自动搜索设计](docs/alpha_mining_design.md)，确定数据切分、未来收益标签、表达式生成、训练评价、交叉变异及验证筛选流程。
 - 新增 [整个项目代码框架](docs/code_framework_design.md)，规划 `alpha/research`、`alpha/mining`、`alpha/library.py` 和 `replay` 的职责与接口。

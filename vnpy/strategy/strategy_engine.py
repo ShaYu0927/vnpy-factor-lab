@@ -4,7 +4,7 @@ from collections import defaultdict
 from importlib import import_module
 from typing import Any, Callable, DefaultDict, Iterable, Optional, Sequence
 
-from vnpy.event.event import EngineEvent, EventType
+from vnpy.event.event_event import EngineEvent, EventType
 from vnpy.strategy.strategy_context import (
     OrderRequest,
     StrategyContext,
@@ -37,14 +37,14 @@ class StrategyEngine:
     StrategyEngine 是策略层的调度中心，不是具体策略本身。
 
     核心职责：
-    1. 管理策略生命周期：add / init / start / stop / remove。
+    1. 管理策略生命周期: add / init / start / stop / remove。
     2. 维护策略订阅关系：
-       - symbol_strategy_map：某个股票应该分发给哪些策略。
-       - factor_strategy_map：某个因子应该分发给哪些策略。
-    3. 接收外部事件：BAR / FACTOR / TRADE_SIGNAL / ORDER。
+       - symbol_strategy_map: 某个股票应该分发给哪些策略。
+       - factor_strategy_map: 某个因子应该分发给哪些策略。
+    3. 接收外部事件: BAR / FACTOR / TRADE_SIGNAL / ORDER。
     4. 根据 symbol + factor_names 把事件分发给具体 StrategyTemplate。
-    5. 接收策略输出：StrategySignal / TargetPosition。
-    6. 在需要时统一创建 OrderRequest，并执行风险检查。
+    5. 接收策略输出: StrategySignal / TargetPosition。
+    6. 在需要时统一创建 OrderRequest, 执行风险检查。
 
     推荐调用链：
         FactorEngine 计算因子
@@ -56,14 +56,7 @@ class StrategyEngine:
             -> StrategyEngine 转发给 trade_module
     """
 
-    def __init__(
-        self,
-        post_event: PostEvent,
-        source: str = "strategy",
-        order_module: str = "order",
-        trade_module: str | None = None,
-        strategy_context: StrategyContext | None = None,
-    ) -> None:
+    def __init__(self, post_event: PostEvent, source: str = "strategy", order_module: str = "order", trade_module: str | None = None, strategy_context: StrategyContext | None = None) -> None:
         # 事件投递函数，由外部事件引擎传入。
         # StrategyEngine 本身不关心事件队列怎么实现，只负责调用这个回调。
         self.post_event = post_event
@@ -121,15 +114,15 @@ class StrategyEngine:
         2. 保存到 self.strategies。
         3. 建立 symbol 订阅关系。
         4. 建立 factor 订阅关系。
-        5. 如果 auto_init=True，自动调用 init_strategy()。
+        5. 如果 auto_init=True, 自动调用 init_strategy()。
 
         参数说明：
-        - strategy_name：策略实例名，必须全局唯一。
-        - strategy_class：可以传类对象，也可以传 "module.ClassName" 字符串。
-        - symbols：策略关注的股票列表；为空表示关注全部 symbol。
-        - factor_names：策略依赖的因子列表；为空表示关注全部 factor。
-        - setting：策略参数字典，会传给具体策略。
-        - auto_init：添加策略后是否立即初始化。
+        - strategy_name: 策略实例名，必须全局唯一。
+        - strategy_class: 可以传类对象, 也可以传 "module.ClassName" 字符串。
+        - symbols: 策略关注的股票列表: 为空表示关注全部 symbol。
+        - factor_names: 策略依赖的因子列表: 为空表示关注全部 factor。
+        - setting: 策略参数字典, 会传给具体策略。
+        - auto_init: 添加策略后是否立即初始化。
         """
         if not strategy_name:
             raise ValueError("strategy_name must not be empty")

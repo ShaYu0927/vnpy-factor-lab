@@ -5,8 +5,8 @@ from datetime import datetime
 import polars as pl
 import pytest
 
-from vnpy.alpha.alpha import Alpha
-from vnpy.alpha.engine import AlphaEngine
+from vnpy.alpha.alpha_formula import Alpha
+from vnpy.alpha.alpha_engine import AlphaEngine
 from vnpy.alpha.expression import ExpressionAnalyzer, ExpressionParser
 
 

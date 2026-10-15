@@ -1,5 +1,5 @@
 """Reusable mathematical formulas and their shared base class."""
 
-from .base import MathBase
+from .math_base import MathBase
 
 __all__ = ["MathBase"]

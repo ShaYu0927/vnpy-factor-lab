@@ -1,4 +1,4 @@
-from vnpy.factor.core.factor_engine import (
+from vnpy.factor.core.core_factor_engine import (
     ExecutionMode,
     Factor,
     FactorBatchResult,

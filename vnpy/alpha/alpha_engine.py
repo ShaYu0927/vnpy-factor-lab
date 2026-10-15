@@ -1,0 +1,448 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import date, datetime
+from math import isfinite
+from collections import defaultdict, deque
+from collections.abc import Iterable, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any
+
+import polars as pl
+
+from .dataset.dataset_utility import calculate_by_expression
+from .alpha_definition import AlphaDefinition
+from .alpha_formula import Alpha
+from .alpha_domain import FactorFrame, MarketFrame
+from .expression import PolarsCompiler, PolarsExecutor
+
+
+@dataclass(frozen=True, slots=True)
+class AlphaSample:
+    """
+    表示某只股票在某个时间点已经计算完成的一组 Alpha 因子值。
+
+    AlphaSample 只保存当前时刻可以观测到的特征，不允许保存未来收益率等标签，
+    避免在回测或实盘中产生未来数据泄漏。
+
+    Attributes:
+        symbol: 股票代码。
+        datetime: 因子对应的行情时间。
+        close: 当前收盘价。
+        features: 因子名称到因子值的映射。
+    """
+
+    symbol: str
+    datetime: datetime
+    close: float
+    features: Mapping[str, float | str | bool]
+
+    def __getattr__(self, name: str) -> float | str | bool:
+        """
+        允许通过属性形式读取 features 中的因子
+        Args:
+            name: 因子名称
+        Returns:
+            对应的因子值
+        Raises:
+            AttributeError: features 中不存在该因子
+        """
+        try:
+            return self.features[name]
+        except KeyError as exc:
+            raise AttributeError(name) from exc
+
+
+class AlphaSampleCache:
+    """
+    按股票缓存最近计算完成的 AlphaSample
+
+    每只股票对应一个固定长度的双端队列，超过 maxlen 后会自动删除最旧数据
+    缓存只保存可观测的 Alpha 特征，不生成或保存未来标签
+    """
+
+    def __init__(self, maxlen: int = 30_000) -> None:
+        self._samples: dict[str, deque[AlphaSample]] = defaultdict(
+            lambda: deque(maxlen=maxlen)
+        )
+
+    def add(self, sample: AlphaSample) -> None:
+        samples = self._samples[sample.symbol]
+        if samples and samples[-1].datetime == sample.datetime:
+            samples[-1] = sample
+        else:
+            samples.append(sample)
+
+    def get_latest(self, symbol: str) -> AlphaSample | None:
+        samples = self._samples.get(symbol)
+        return samples[-1] if samples else None
+
+    def get_recent(self, symbol: str, count: int) -> list[AlphaSample]:
+        return (
+            list(self._samples.get(symbol, ()))[-max(count, 0) :] if count > 0 else []
+        )
+
+    def symbols(self) -> list[str]:
+        return list(self._samples)
+
+    def clear_all(self) -> None:
+        self._samples.clear()
+
+
+class AlphaEngine:
+    """
+    Alpha 因子计算引擎。
+    该引擎统一处理离线历史数据和实盘数据，支持两种因子定义：
+    1. Alpha:
+       使用公式字符串定义，经过解析、表达树构建和 Polars 编译后执行。
+    2. AlphaDefinition:
+       已经包含底层表达式的旧式或兼容性定义，通过
+       calculate_by_expression() 执行
+    基本执行链路：
+        Alpha公式
+            -> 表达树
+            -> PolarsCompiler
+            -> CompiledExpression
+            -> PolarsExecutor
+            -> 因子结果
+    """
+
+    def __init__(self, definitions: Sequence[AlphaDefinition | Alpha]) -> None:
+        names = [item.name for item in definitions]
+        if len(names) != len(set(names)):
+            raise ValueError("alpha names must be unique")
+        if set(names) & {"datetime", "vt_symbol"}:
+            raise ValueError("alpha names must not shadow index columns")
+        resolved: list[AlphaDefinition] = []
+        trees = {}
+        for item in definitions:
+            if isinstance(item, Alpha):
+                try:
+                    tree = item.parse()
+                    if not item.name.isidentifier():
+                        raise ValueError("alpha name must be an identifier")
+                    trees[item.name] = tree
+                    resolved.append(AlphaDefinition.from_tree(item.name, tree))
+                except (TypeError, ValueError, KeyError) as exc:
+                    raise ValueError(
+                        f"alpha {item.name!r}, formula {item.formula!r}: {exc}"
+                    ) from exc
+            else:
+                resolved.append(item)
+        # Freeze definitions at construction, including the inferred lookbacks.
+        self.definitions = tuple(resolved)
+        self._input_definitions = tuple(definitions)
+        self._compiled_batch = PolarsCompiler().compile_many(trees) if trees else None
+
+    @property
+    def min_bars(self) -> int:
+        """
+        返回计算全部 Alpha 至少需要准备的历史K线数量。
+
+        取所有因子 lookback 的最大值。例如因子分别需要5、20、60根K线
+        则整个引擎至少需要准备60根K线。
+
+        Returns:
+            最大历史回看周期:没有因子时返回1。
+        """
+        return max((item.lookback for item in self.definitions), default=1)
+
+    """
+    判断当前因子集合是否需要横截面数据。
+
+    Rank、行业中性化等横截面算子需要同一时间点的多只股票
+    同时参与计算，不能只传入单只股票数据。
+
+    Returns:
+        只要存在一个横截面因子就返回 True。
+    """
+
+    @property
+    def requires_cross_section(self) -> bool:
+        return any(item.uses_cross_section for item in self.definitions)
+
+    """
+    批量计算历史行情中的全部 Alpha 因子
+
+    输入数据经过主键检查和排序后，统一执行新式 Alpha 表达式的
+    共享计算计划，再按 datetime、vt_symbol 合并兼容式 AlphaDefinition 的结果。
+
+    Args:
+        frame: 包含 datetime、vt_symbol、close 以及因子所需
+            行情字段的 Polars DataFrame
+
+    Returns:
+        包含 datetime、vt_symbol 和全部因子值的 DataFrame
+    """
+
+    def calculate(self, frame: pl.DataFrame) -> pl.DataFrame:
+        return self.calculate_factors(MarketFrame(frame)).frame
+
+    def calculate_factors(self, market: MarketFrame) -> FactorFrame:
+        """Calculate factors through the shared market and factor contracts."""
+        if not isinstance(market, MarketFrame):
+            raise TypeError("market must be a MarketFrame")
+        return FactorFrame(self._calculate_normalized(market.frame))
+
+    def calculate_parallel(
+        self, frame: pl.DataFrame, *, workers: int = 1
+    ) -> pl.DataFrame:
+        """Run formula groups concurrently against the same complete market table.
+
+        Each group retains all dates and symbols, including for nested time-series
+        and cross-sectional expressions. Threads share columnar input buffers;
+        Polars executes the native work. One worker keeps the shared expression
+        plan intact and still uses Polars' native thread pool.
+        """
+        if isinstance(workers, bool) or not isinstance(workers, int) or workers < 1:
+            raise ValueError("workers must be a positive integer")
+        source = self._normalize_frame(frame)
+        count = min(workers, len(self.definitions))
+        if count <= 1:
+            return FactorFrame(self._calculate_normalized(source)).frame
+        # Contiguous groups preserve configured factor order in the output.
+        size = (len(self.definitions) + count - 1) // count
+        engines = [
+            AlphaEngine(self._input_definitions[i : i + size])
+            for i in range(0, len(self.definitions), size)
+        ]
+        with ThreadPoolExecutor(
+            max_workers=count, thread_name_prefix="alpha-batch"
+        ) as pool:
+            results = list(
+                pool.map(lambda engine: engine._calculate_normalized(source), engines)
+            )
+        # All groups use the same unique keys and deterministic output ordering.
+        return FactorFrame(
+            results[0].hstack(
+                [
+                    column
+                    for result in results[1:]
+                    for column in result.drop("datetime", "vt_symbol")
+                ]
+            )
+        ).frame
+
+    def _calculate_normalized(self, source: pl.DataFrame) -> pl.DataFrame:
+        batch = self._compiled_batch
+        result = (
+            PolarsExecutor.run_batch(source, batch)
+            if batch
+            else source.select(["datetime", "vt_symbol"])
+        )
+        for definition in self.definitions:
+            if batch and definition.name in batch.expressions:
+                continue
+            values = calculate_by_expression(source, definition.expression).rename(
+                {"data": definition.name}
+            )
+            result = result.join(values, on=["datetime", "vt_symbol"], how="left")
+        return result.select(
+            "datetime", "vt_symbol", *[item.name for item in self.definitions]
+        ).sort(["datetime", "vt_symbol"])
+
+    """
+    计算每只股票在指定时间或最新时间的因子快照。
+
+    Args:
+        frame: 历史行情数据。
+        at: 指定计算时刻。为空时返回每只股票的最新结果。
+
+    Returns:
+        必需因子完整且数值有效的 AlphaSample 列表；可选候选仅附加有效值。
+    """
+
+    def calculate_latest(
+        self,
+        frame: pl.DataFrame,
+        at: datetime | None = None,
+        *,
+        optional_names: Sequence[str] = (),
+    ) -> list[AlphaSample]:
+        """Optional research candidates contribute finite values without blocking required factors."""
+        names = [item.name for item in self.definitions]
+        if set(optional_names) - set(names):
+            raise ValueError("optional alpha names must be registered definitions")
+        market = MarketFrame(frame)
+        source = market.frame
+        calculated = self.calculate_factors(market).frame
+        return self._latest_samples(source, calculated, names, at, optional_names)
+
+    """
+    将因子计算结果转换为最新的 AlphaSample。
+
+    每只股票只保留指定时刻或最新时刻的数据，并补充对应的
+    收盘价。必需因子为空、NaN 或无穷大时跳过样本；可选候选的
+    无效值仅从 features 中省略，不影响必需因子的输出。
+
+    Args:
+        source: 标准化后的原始行情。
+        calculated: 已经计算完成的因子数据。
+        names: 要写入样本的因子名称。
+        at: 指定时间；为空时取每只股票的最新时间。
+
+    Returns:
+        按股票代码排序的有效 AlphaSample 列表。
+    """
+
+    def _latest_samples(
+        self,
+        source: pl.DataFrame,
+        calculated: pl.DataFrame,
+        names: Sequence[str],
+        at: datetime | None,
+        optional_names: Sequence[str] = (),
+    ) -> list[AlphaSample]:
+        if at is None:
+            latest = calculated.group_by("vt_symbol").agg(
+                pl.all().sort_by("datetime").last()
+            )
+        else:
+            latest = calculated.filter(pl.col("datetime") == pl.lit(at))
+        closes = source.select(["datetime", "vt_symbol", "close"])
+        latest = latest.join(closes, on=["datetime", "vt_symbol"], how="left")
+        samples: list[AlphaSample] = []
+        required_names = set(names) - set(optional_names)
+        for row in latest.iter_rows(named=True):
+            features = {
+                name: float(row[name])
+                for name in names
+                if row.get(name) is not None and isfinite(float(row[name]))
+            }
+            if not required_names.issubset(features) or (
+                optional_names and not features
+            ):
+                continue
+            samples.append(
+                AlphaSample(
+                    symbol=str(row["vt_symbol"]),
+                    datetime=row["datetime"],
+                    close=float(row["close"]),
+                    features=features,
+                )
+            )
+        return sorted(samples, key=lambda item: item.symbol)
+
+    """
+    将按股票组织的 Bar 对象转换为 Polars DataFrame。
+
+    支持字典和普通对象形式的 Bar, 并提取基础行情字段以及
+    vwap、市值、行业等可选字段。
+
+    Args:
+        bars_by_symbol: 股票代码到历史 Bar 序列的映射
+
+    Returns:
+        按股票代码和时间排序的行情 DataFrame
+    """
+
+    def from_bars(self, bars_by_symbol: Mapping[str, Iterable[Any]]) -> pl.DataFrame:
+        rows = []
+        for symbol, bars in bars_by_symbol.items():
+            for bar in bars:
+                dt = _bar_value(bar, "datetime", "bob", "eob")
+                row = {"datetime": dt, "vt_symbol": symbol}
+                for field in (
+                    "open",
+                    "high",
+                    "low",
+                    "close",
+                    "volume",
+                    "amount",
+                    "turn",
+                ):
+                    value = _bar_value(bar, field, required=False)
+                    if value is not None:
+                        row[field] = value
+                extra = _bar_value(bar, "extra", required=False) or {}
+                for field in (
+                    "vwap",
+                    "market_cap",
+                    "industry",
+                    "sector",
+                    "subindustry",
+                ):
+                    value = _bar_value(bar, field, required=False)
+                    if value is None:
+                        value = extra.get(field)
+                    if value is not None:
+                        row[field] = value
+                rows.append(row)
+        if not rows:
+            return pl.DataFrame({"datetime": [], "vt_symbol": []})
+        return pl.DataFrame(rows).sort(["vt_symbol", "datetime"])
+
+    """
+    将 AlphaSample 转换为模型层使用的 FactorObservation。
+
+    该方法用于连接因子计算层与后续的模型训练、股票评分
+    和交易信号生成模块。
+
+    Args:
+        samples: 已经计算完成的因子快照。
+
+    Returns:
+        FactorObservation 列表。
+    """
+
+    def to_observations(self, samples: Sequence[AlphaSample]):
+        from .modeling.modeling_schema import FactorObservation
+
+        return [
+            FactorObservation(
+                trade_date=_to_date(sample.datetime),
+                symbol=sample.symbol,
+                close=sample.close,
+                features=dict(sample.features),
+            )
+            for sample in samples
+        ]
+
+    """
+    检查并标准化因子计算所需的行情数据。
+
+    检查必要字段、空主键和重复主键，然后按照股票代码及
+    时间排序，保证 Ref、Mean、Delta 等时序算子顺序正确。
+
+    Args:
+        frame: 原始行情 DataFrame。
+
+    Returns:
+        排序完成的行情 DataFrame。
+
+    Raises:
+        ValueError: 缺少必要字段、主键为空或存在重复记录。
+    """
+
+    @staticmethod
+    def _normalize_frame(frame: pl.DataFrame) -> pl.DataFrame:
+        return MarketFrame(frame).frame
+
+    """
+    从字典或普通对象中读取第一个有效字段值。
+
+    Args:
+        bar: 字典形式或属性形式的 Bar 对象。
+        *names: 按优先级排列的候选字段名。
+        required: 找不到字段时是否抛出异常。
+
+    Returns:
+        第一个非空字段值；非必需字段不存在时返回 None。
+
+    Raises:
+        ValueError: 必需字段不存在。
+    """
+
+
+def _bar_value(bar: Any, *names: str, required: bool = True) -> Any:
+    for name in names:
+        value = bar.get(name) if isinstance(bar, Mapping) else getattr(bar, name, None)
+        if value is not None:
+            return value
+    if required:
+        raise ValueError(f"bar is missing required field: {'/'.join(names)}")
+    return None
+
+
+def _to_date(value: datetime) -> date:
+    return value.date()

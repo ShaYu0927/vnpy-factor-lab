@@ -1,6 +1,6 @@
-from .reweighter import ColumnReweighter, Reweighter
-from .serializable import Serializable
-from .template import AlphaModel, BaseModel, FineTunableAlphaModel
+from .model_reweighter import ColumnReweighter, Reweighter
+from .model_serializable import Serializable
+from .model_template import AlphaModel, BaseModel, FineTunableAlphaModel
 
 
 __all__ = [

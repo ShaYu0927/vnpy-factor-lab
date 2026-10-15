@@ -1,5 +1,5 @@
-from .template import AlphaStrategy
-from .backtesting import BacktestingEngine
+from .strategy_template import AlphaStrategy
+from .strategy_backtesting import BacktestingEngine
 
 
 __all__ = [

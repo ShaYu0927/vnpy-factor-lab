@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from vnpy.event.base_module import BaseModule, make_module_entry
-from vnpy.event.event import EngineEvent, EventType
+from vnpy.event.event_base_module import BaseModule, make_module_entry
+from vnpy.event.event_event import EngineEvent, EventType
 from vnpy.strategy.strategy_engine import StrategyEngine
 
 

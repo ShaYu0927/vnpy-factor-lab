@@ -1,6 +1,6 @@
 """Compatibility exports for generic Alpha samples."""
 
-from vnpy.factor.core.factor_sample import (
+from vnpy.factor.core.core_factor_sample import (
     FactorSample,
     FactorSampleBuilder,
     FastFactorSampleCache,

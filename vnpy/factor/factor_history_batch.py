@@ -1,6 +1,6 @@
 """Read a complete market interval and calculate all configured formulas once."""
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 import json
 from pathlib import Path
@@ -9,9 +9,9 @@ from time import perf_counter
 
 import polars as pl
 
-from vnpy.common.logger import get_logger
-from vnpy.datafeed.data_daily_store import atomic_parquet
-from vnpy.datafeed.data_market_module import load_market_snapshot
+from vnpy.common.common_logger import get_logger
+from vnpy.datafeed.datafeed_data_daily_store import atomic_parquet
+from vnpy.datafeed.datafeed_data_market_module import load_market_snapshot
 
 
 @dataclass(frozen=True)
@@ -81,9 +81,13 @@ def run_history_batch(runtime, options, engine, definitions, *, module_engine, e
         atomic_parquet(market, output / "market.parquet")
         atomic_parquet(factors, output / "factors.parquet")
         if evaluation is not None:
-            from vnpy.alpha.modeling.runtime_evaluation import evaluate_frames
+            from vnpy.alpha.modeling.modeling_runtime_evaluation import evaluate_frames
+            from vnpy.alpha.alpha_time_split import build_session_split
+            split = build_session_split(market["datetime"].to_list(), runtime.time_split)
+            evaluation = replace(evaluation, train_fraction=runtime.time_split.train_fraction)
             summary["evaluation"] = evaluate_frames(
                 market, factors, definitions, evaluation,
+                split=split,
                 context={"runtime": runtime.raw, "input": asdict(setting),
                          "factor_source": "history batch result reused without rereading or recalculating"},
             )
